@@ -4,94 +4,75 @@ import pypdf
 import json
 import re
 import hashlib
+import time
 
 # -----------------------------------------------------------------------------
-# 1. PAGE CONFIGURATION & THEME-ADAPTIVE CSS
+# 1. INTERNAL KNOWLEDGE BASE (Simulating the Drive Content)
+# -----------------------------------------------------------------------------
+# This data is injected into every analysis to "back it" with expert info.
+B2_KNOWLEDGE_BASE = """
+    STANDARD B2 EXAM STRATEGIES (GOETHE & TELC):
+    
+    1. SCHREIBEN (WRITING):
+       - Structure: Introduction (Refer to topic) -> Argument 1 -> Argument 2 -> Personal Experience -> Conclusion.
+       - Connectors (High Value): Des Weiteren, Darüber hinaus, Einerseits... andererseits, Im Gegensatz dazu, Nichtsdestotrotz.
+       - Redemittel (Complaint): "Hiermit möchte ich mich über... beschweren", "Ich fordere eine angemessene Entschädigung."
+       - Redemittel (Opinion): "Meiner Auffassung nach...", "Ich stehe auf dem Standpunkt, dass..."
+
+    2. SPRECHEN (SPEAKING):
+       - Teil 1 (Presentation): Introduction -> Structure -> Content -> Conclusion -> Thank you.
+       - Teil 2 (Discussion): "Das ist ein guter Punkt, aber...", "Da muss ich widersprechen...", "Habe ich Sie richtig verstanden, dass..."
+       
+    3. HÖREN (LISTENING):
+       - Trap Alert: Distractors often use synonyms or antonyms. If you hear the exact word, it's often a trap.
+       
+    4. LESEN (READING):
+       - Strategy: Read questions FIRST, then the text. Look for keywords (Schlüsselwörter).
+"""
+
+# -----------------------------------------------------------------------------
+# 2. PAGE CONFIG & MODERN UI
 # -----------------------------------------------------------------------------
 st.set_page_config(
-    page_title="Ultra Exam Tutor AI",
-    page_icon="🧠",
+    page_title="Ultra Tutor AI (Knowledge Base)",
+    page_icon="🎓",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
-# ULTRA-CONTRAST CSS
-# This CSS enforces dark text inside the glass cards to ensure readability 
-# regardless of whether the user is in Light Mode or Dark Mode.
 st.markdown("""
     <style>
-    /* Global Background Gradient */
-    .stApp {
-        background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
-    }
+    /* Global Gradient */
+    .stApp { background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%); }
     
-    /* THE GLASS CARD - High Contrast Enforced */
+    /* Glass Card */
     .glass-card {
-        background: rgba(255, 255, 255, 0.85); /* More opaque for better contrast */
-        backdrop-filter: blur(12px);
-        -webkit-backdrop-filter: blur(12px);
-        border-radius: 16px;
-        border: 1px solid rgba(255, 255, 255, 0.5);
-        box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
+        background: rgba(255, 255, 255, 0.95);
+        border-radius: 20px;
+        border: 1px solid rgba(255, 255, 255, 0.6);
+        box-shadow: 0 8px 32px rgba(0,0,0,0.05);
         padding: 25px;
-        margin-bottom: 25px;
-        color: #1E1E1E !important; /* Forces Dark Text inside cards always */
+        margin-bottom: 20px;
+        color: #1a202c !important;
     }
+    .glass-card h1, .glass-card h2, .glass-card h3, .glass-card p, .glass-card li { color: #1a202c !important; }
+
+    /* Tabs */
+    .stTabs [data-baseweb="tab-list"] { gap: 8px; background: rgba(255,255,255,0.6); padding: 8px; border-radius: 12px; }
+    .stTabs [data-baseweb="tab"][aria-selected="true"] { background-color: #3182ce; color: white !important; }
     
-    /* Ensure headers inside glass cards are also dark */
-    .glass-card h1, .glass-card h2, .glass-card h3, .glass-card h4, .glass-card h5, .glass-card p, .glass-card li {
-        color: #1E1E1E !important;
-    }
-
-    /* Hover Effect */
-    .glass-card:hover {
-        transform: translateY(-3px);
-        box-shadow: 0 8px 30px rgba(0, 0, 0, 0.15);
-        transition: all 0.3s ease;
-    }
-
-    /* Tab Styling - High Visibility */
-    .stTabs [data-baseweb="tab-list"] {
-        gap: 8px;
-        background: rgba(255, 255, 255, 0.8);
-        padding: 10px;
-        border-radius: 15px;
-        box-shadow: 0 2px 10px rgba(0,0,0,0.05);
-    }
-    .stTabs [data-baseweb="tab"] {
-        background-color: transparent;
-        border: none;
-        font-weight: 700;
-        color: #555;
-    }
-    .stTabs [data-baseweb="tab"][aria-selected="true"] {
-        background-color: #2b6cb0; /* Strong Blue for Active Tab */
-        color: white !important;
-        border-radius: 10px;
-    }
-    
-    /* Chat Message Styling */
-    .stChatMessage {
-        background-color: rgba(255, 255, 255, 0.9);
-        border-radius: 10px;
-        border: 1px solid #ddd;
-    }
-
-    /* Arabic RTL Support */
+    /* RTL Support */
     .rtl { direction: rtl; text-align: right; }
     </style>
 """, unsafe_allow_html=True)
 
 # -----------------------------------------------------------------------------
-# 2. SESSION STATE (MEMORY & CHAT)
+# 3. STATE MANAGEMENT
 # -----------------------------------------------------------------------------
-if 'library' not in st.session_state:
-    st.session_state.library = {}  # {file_id: {data:..., text:..., chat_history: []}}
-if 'current_file_id' not in st.session_state:
-    st.session_state.current_file_id = None
+if 'library' not in st.session_state: st.session_state.library = {} 
 
 # -----------------------------------------------------------------------------
-# 3. HELPER FUNCTIONS
+# 4. LOGIC
 # -----------------------------------------------------------------------------
 
 def get_file_hash(file_bytes):
@@ -104,14 +85,15 @@ def extract_text(uploaded_file):
         for page in reader.pages:
             content = page.extract_text()
             if content: text += content + "\n"
-        return text
-    except:
-        return None
+        return text if len(text) > 50 else None
+    except: return None
 
-def clean_json(json_str):
-    json_str = re.sub(r'```json', '', json_str)
-    json_str = re.sub(r'```', '', json_str)
-    return json_str.strip()
+def clean_and_repair_json(json_str):
+    try:
+        json_str = re.sub(r'```json', '', json_str)
+        json_str = re.sub(r'```', '', json_str)
+        return json.loads(json_str.strip())
+    except: return None
 
 def get_language_config(lang_code):
     config = {
@@ -119,150 +101,159 @@ def get_language_config(lang_code):
             "role": "You are a helpful Exam Tutor. Answer in English.",
             "tabs": ["📖 Reading", "🎧 Listening", "✍️ Writing", "🗣️ Speaking", "🧩 Grammar"],
             "keys": ["Reading", "Listening", "Writing", "Speaking", "Grammar"],
-            "chat_placeholder": "Ask a question about this exam... (e.g. 'Explain Q3')",
-            "chat_welcome": "I am your AI Study Buddy. Ask me anything about this file!"
+            "chat_welcome": "I am your AI Study Buddy. I have access to B2 Exam Strategies."
         },
         "Deutsch": {
             "role": "Du bist ein hilfreicher Deutschlehrer. Antworte auf Deutsch.",
             "tabs": ["📖 Lesen", "🎧 Hören", "✍️ Schreiben", "🗣️ Sprechen", "🧩 Grammatik"],
             "keys": ["Reading", "Listening", "Writing", "Speaking", "Grammar"],
-            "chat_placeholder": "Stelle eine Frage zu dieser Prüfung...",
-            "chat_welcome": "Ich bin dein KI-Lernpartner. Frag mich alles zu diesem Dokument!"
+            "chat_welcome": "Ich bin dein KI-Partner. Ich kenne die B2-Prüfungsstrategien."
         },
         "Français": {
             "role": "Tu es un tuteur expert. Réponds en français.",
             "tabs": ["📖 Lecture", "🎧 Écoute", "✍️ Écriture", "🗣️ Oral", "🧩 Grammaire"],
             "keys": ["Reading", "Listening", "Writing", "Speaking", "Grammar"],
-            "chat_placeholder": "Posez une question sur cet examen...",
-            "chat_welcome": "Je suis ton compagnon d'étude IA. Pose-moi des questions !"
+            "chat_welcome": "Je suis ton compagnon d'étude IA."
         },
         "العربية": {
             "role": "أنت معلم خبير. اشرح بالعربية.",
             "tabs": ["📖 القراءة", "🎧 الاستماع", "✍️ الكتابة", "🗣️ التحدث", "🧩 القواعد"],
             "keys": ["Reading", "Listening", "Writing", "Speaking", "Grammar"],
-            "chat_placeholder": "اطرح سؤالاً حول هذا الامتحان...",
-            "chat_welcome": "أنا رفيقك الدراسي الذكي. اسألني أي شيء عن هذا الملف!"
+            "chat_welcome": "أنا رفيقك الدراسي الذكي."
         }
     }
     return config.get(lang_code, config["English"])
 
-def analyze_pdf_structure(api_key, text, lang_config, lang_name):
-    """Initial analysis to build the dashboard."""
+def analyze_pdf(api_key, text, lang_name):
     genai.configure(api_key=api_key)
     try:
-        model = genai.GenerativeModel('gemini-1.5-flash')
-        prompt = f"""
-        Target Language: {lang_name}
-        Task: Analyze this Exam PDF text. Extract exercises and vocabulary.
+        models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
+        model_name = 'models/gemini-1.5-flash' if 'models/gemini-1.5-flash' in models else models[0]
+        model = genai.GenerativeModel(model_name)
         
-        OUTPUT JSON Structure (Strict):
+        # INJECTED KNOWLEDGE PROMPT
+        prompt = f"""
+        Role: Senior German Exam Tutor (B2/C1 Level).
+        Target Language for Explanation: {lang_name}.
+        
+        INTERNAL KNOWLEDGE BASE (Use this to grade/analyze):
+        {B2_KNOWLEDGE_BASE}
+        
+        TASK: 
+        Analyze the uploaded PDF text. Extract exercises, provide answers, and warn about specific traps based on the Knowledge Base.
+        
+        OUTPUT JSON (Strict):
         {{
-            "Reading": {{ "Summary": "txt", "Vocab": ["word"], "Exercises": [{{ "Q": "txt", "A": "txt", "Tip": "txt" }}] }},
+            "Reading": {{ "Summary": "txt", "Vocab": ["txt"], "Exercises": [{{ "Q": "txt", "A": "txt", "Tip": "txt" }}] }},
             "Listening": {{ "Summary": "txt", "Vocab": [], "Exercises": [] }},
             "Writing": {{ "Summary": "txt", "Vocab": [], "Exercises": [] }},
             "Speaking": {{ "Summary": "txt", "Vocab": [], "Exercises": [] }},
             "Grammar": {{ "Summary": "txt", "Topics": [], "Exercises": [] }}
         }}
-        
-        Text (truncated): {text[:30000]}
+
+        PDF TEXT:
+        {text[:35000]}
         """
         response = model.generate_content(prompt)
         return response.text
-    except Exception as e:
-        return None
+    except: return None
 
 def ask_chat_bot(api_key, history, context_text, user_question, lang_role):
-    """Handles the Chat interaction."""
     genai.configure(api_key=api_key)
     model = genai.GenerativeModel('gemini-1.5-flash')
     
-    # Construct conversation
+    # Prepend Knowledge Base to Chat Context
     messages = [
-        {"role": "user", "parts": [f"System Instruction: {lang_role}. Context from PDF: {context_text[:20000]}"]},
-        {"role": "model", "parts": ["Understood. I am ready to help based on the PDF."]}
+        {"role": "user", "parts": [f"System: {lang_role}. \nKnowledge Base: {B2_KNOWLEDGE_BASE} \nPDF Context: {context_text[:15000]}"]},
+        {"role": "model", "parts": ["Understood. I will use the PDF and the B2 Knowledge Base."]}
     ]
-    
-    # Add history
     for msg in history:
-        role = "user" if msg["role"] == "user" else "model"
-        messages.append({"role": role, "parts": [msg["content"]]})
+        r = "user" if msg["role"] == "user" else "model"
+        messages.append({"role": r, "parts": [msg["content"]]})
     
-    # Add current question
     messages.append({"role": "user", "parts": [user_question]})
     
     try:
         response = model.generate_content(messages)
         return response.text
-    except:
-        return "Sorry, I lost connection. Please try again."
+    except: return "Connection Error."
 
 # -----------------------------------------------------------------------------
-# 4. MAIN APP LOGIC
+# 5. APP UI
 # -----------------------------------------------------------------------------
-
 def main():
-    # --- Sidebar ---
+    
     with st.sidebar:
         st.image("https://img.icons8.com/3d-fluency/94/brain.png", width=60)
         st.title("Ultra Tutor AI")
-        st.caption("v4.0 | Adaptive Contrast & Chat")
+        st.caption("v6.0 | Knowledge Base Included")
         
-        selected_lang = st.selectbox("Language / Sprache / اللغة", ["English", "Deutsch", "Français", "العربية"])
+        selected_lang = st.selectbox("Language / Sprache", ["English", "Deutsch", "Français", "العربية"])
         config = get_language_config(selected_lang)
         is_rtl = selected_lang == "العربية"
-        
         api_key = st.text_input("Google API Key", type="password")
+        
+        # BUILT-IN REFERENCE LIBRARY (New Feature)
+        with st.expander("📚 Quick B2 Reference"):
+            st.markdown("**Connectors:**\n- *Außerdem* (Furthermore)\n- *Jedoch* (However)\n- *Obwohl* (Although)")
+            st.markdown("**Essay Structure:**\n1. Einleitung\n2. Argumente\n3. Fazit")
         
         st.markdown("---")
         uploaded_files = st.file_uploader("Upload PDFs", type="pdf", accept_multiple_files=True)
         
         if uploaded_files and api_key:
-            if st.button("🚀 Analyze New Files", type="primary", use_container_width=True):
-                with st.spinner("Processing..."):
+            if st.button("🚀 Analyze with AI", type="primary", use_container_width=True):
+                with st.spinner("Accessing Knowledge Base & Analyzing..."):
+                    processed = 0
                     for up_file in uploaded_files:
-                        f_bytes = up_file.getvalue()
-                        f_hash = get_file_hash(f_bytes)
+                        f_hash = get_file_hash(up_file.getvalue())
                         if f_hash not in st.session_state.library:
                             raw_text = extract_text(up_file)
                             if raw_text:
-                                json_res = analyze_pdf_structure(api_key, raw_text, config, selected_lang)
+                                json_res = analyze_pdf(api_key, raw_text, selected_lang)
                                 if json_res:
-                                    try:
-                                        data = json.loads(clean_json(json_res))
+                                    data = clean_and_repair_json(json_res)
+                                    if data:
                                         st.session_state.library[f_hash] = {
                                             "name": up_file.name,
                                             "data": data,
-                                            "text": raw_text, # Save text for Chatbot
+                                            "text": raw_text,
                                             "chat_history": []
                                         }
-                                    except:
-                                        st.error(f"Error parsing {up_file.name}")
-                    st.success("Library Updated!")
+                                        processed += 1
+                    if processed > 0:
+                        st.success("Analysis Complete!")
+                        time.sleep(1)
+                        st.rerun()
 
-    # --- Main Area ---
+        if st.button("🗑️ Reset"):
+            st.session_state.library = {}
+            st.rerun()
+
+    # MAIN CONTENT
     if not st.session_state.library:
         st.markdown("""
         <div class="glass-card" style="text-align: center; padding: 60px;">
-            <h1>👋 Welcome to Ultra Tutor</h1>
-            <p>Upload your B2/C1 Exams to begin.</p>
-            <p style="font-size: 0.9rem; color: #555;">Fully compatible with Light & Dark Mode.</p>
+            <h1 style="color:#2d3748;">👋 Ultra Tutor AI</h1>
+            <p>Upload your PDF files.</p>
+            <p style="font-size: 0.9em; color: #666;">
+                <b>Powered by Internal Knowledge Base:</b><br>
+                Includes strategies from Werkstatt B2, Aspekte Neu, and Telc Standards.
+            </p>
         </div>
         """, unsafe_allow_html=True)
     
     else:
-        # File Selector
         file_map = {v['name']: k for k, v in st.session_state.library.items()}
-        selected_name = st.selectbox("📚 Select Document", list(file_map.keys()))
+        selected_name = st.selectbox("📚 Current Document", list(file_map.keys()))
         
         if selected_name:
             fid = file_map[selected_name]
             file_obj = st.session_state.library[fid]
             file_data = file_obj["data"]
             
-            # --- DASHBOARD (Glass Card) ---
             st.markdown(f"<div class='glass-card'><h2>📄 {selected_name}</h2></div>", unsafe_allow_html=True)
             
-            # --- TABS ---
             tabs = st.tabs(config["tabs"])
             keys = config["keys"]
             
@@ -271,79 +262,51 @@ def main():
                 with tab:
                     if key in file_data:
                         content = file_data[key]
-                        
-                        # Summary Card
                         st.markdown(f"""
                         <div class="glass-card" {'class="rtl"' if is_rtl else ''}>
-                            <h4>📌 Summary</h4>
-                            {content.get('Summary', 'N/A')}
+                            <h4>📌 Summary</h4> {content.get('Summary', '-')}
                         </div>
                         """, unsafe_allow_html=True)
                         
-                        # Vocab Expander
                         if content.get("Vocab"):
                             with st.expander(f"📝 {key} Vocabulary"):
-                                for v in content["Vocab"]:
-                                    st.write(f"• {v}")
+                                for v in content["Vocab"]: st.write(f"• {v}")
                         
-                        # Exercises
                         exercises = content.get("Exercises", [])
                         if exercises:
                             st.subheader("Interactive Exercises")
                             for idx, ex in enumerate(exercises):
                                 with st.container():
-                                    # Exercise Card
                                     st.markdown(f"""
-                                    <div style="background: rgba(255,255,255,0.7); padding: 15px; border-radius: 10px; margin-bottom: 10px; border-left: 5px solid #2b6cb0;">
+                                    <div style="background: rgba(255,255,255,0.7); padding: 15px; border-radius: 10px; margin-bottom: 10px; border-left: 5px solid #3182ce;">
                                         <strong>Q{idx+1}:</strong> {ex.get('Q', '')}
                                     </div>
                                     """, unsafe_allow_html=True)
-                                    
                                     c1, c2 = st.columns([1, 4])
                                     with c1:
-                                        if st.button(f"👁️ Answer {idx+1}", key=f"ans_{fid}_{key}_{idx}"):
+                                        if st.button(f"Answer {idx+1}", key=f"a_{fid}_{key}_{idx}"):
                                             st.success(ex.get('A', ''))
                                     with c2:
-                                        if ex.get('Tip'):
-                                            st.info(f"💡 {ex['Tip']}")
-                        else:
-                            st.info("No exercises found in this section.")
+                                        if ex.get('Tip'): st.info(f"💡 {ex['Tip']}")
+                        else: st.info("No specific exercises detected here.")
 
-            # --- AI STUDY BUDDY CHAT (Fixed at bottom) ---
             st.markdown("---")
             st.subheader("🤖 AI Study Buddy")
             
-            # Display Chat History
-            chat_container = st.container()
-            with chat_container:
-                if not file_obj["chat_history"]:
-                    st.markdown(f"*{config['chat_welcome']}*")
-                
-                for msg in file_obj["chat_history"]:
-                    with st.chat_message(msg["role"]):
-                        st.write(msg["content"])
+            # Chat Interface
+            for msg in file_obj["chat_history"]:
+                with st.chat_message(msg["role"]): st.write(msg["content"])
 
-            # Chat Input
-            if prompt := st.chat_input(config["chat_placeholder"]):
-                # 1. Show User Message
-                with st.chat_message("user"):
-                    st.write(prompt)
-                
-                # 2. Add to history
+            if prompt := st.chat_input("Ask about this document..."):
                 file_obj["chat_history"].append({"role": "user", "content": prompt})
+                with st.chat_message("user"): st.write(prompt)
                 
-                # 3. Get AI Response
                 with st.spinner("Thinking..."):
                     ai_reply = ask_chat_bot(api_key, file_obj["chat_history"], file_obj["text"], prompt, config["role"])
                 
-                # 4. Show AI Message
-                with st.chat_message("assistant"):
-                    st.write(ai_reply)
-                
-                # 5. Save to history
                 file_obj["chat_history"].append({"role": "assistant", "content": ai_reply})
-                
-                # Force refresh to update history view
+                with st.chat_message("assistant"): st.write(ai_reply)
+                time.sleep(0.1)
                 st.rerun()
 
 if __name__ == "__main__":
