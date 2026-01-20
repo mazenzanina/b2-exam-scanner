@@ -3,129 +3,168 @@ import google.generativeai as genai
 import pypdf
 import json
 import re
+import hashlib
 
 # -----------------------------------------------------------------------------
-# 1. MODERN UI CONFIGURATION & CSS
+# 1. PAGE CONFIGURATION & LIQUID GLASS UI
 # -----------------------------------------------------------------------------
 st.set_page_config(
-    page_title="Pro B2 Exam Tutor",
-    page_icon="🎓",
+    page_title="Ultra Exam Tutor AI",
+    page_icon="🧠",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
-# Custom CSS for a modern, clean look
+# Custom CSS for Liquid Glassmorphism & Arabic Support
 st.markdown("""
     <style>
-    .main {
-        background-color: #f8f9fa;
+    /* Main Background */
+    .stApp {
+        background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
     }
+    
+    /* Liquid Glass Cards */
+    .glass-card {
+        background: rgba(255, 255, 255, 0.65);
+        backdrop-filter: blur(12px);
+        -webkit-backdrop-filter: blur(12px);
+        border-radius: 20px;
+        border: 1px solid rgba(255, 255, 255, 0.3);
+        box-shadow: 0 8px 32px 0 rgba(31, 38, 135, 0.07);
+        padding: 20px;
+        margin-bottom: 20px;
+        transition: transform 0.2s;
+    }
+    .glass-card:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 12px 40px 0 rgba(31, 38, 135, 0.1);
+    }
+
+    /* Tab Styling */
     .stTabs [data-baseweb="tab-list"] {
-        gap: 10px;
+        gap: 8px;
+        background: rgba(255, 255, 255, 0.4);
+        padding: 10px;
+        border-radius: 15px;
+        backdrop-filter: blur(10px);
     }
     .stTabs [data-baseweb="tab"] {
-        background-color: #ffffff;
-        border-radius: 10px 10px 0px 0px;
-        padding: 10px 20px;
-        box-shadow: 0px 2px 4px rgba(0,0,0,0.05);
+        background-color: transparent;
+        border: none;
+        font-weight: 600;
     }
     .stTabs [data-baseweb="tab"][aria-selected="true"] {
-        background-color: #e3f2fd;
-        border-bottom: 2px solid #1976d2;
-    }
-    .metric-card {
-        background-color: white;
-        padding: 15px;
+        background-color: #ffffff;
         border-radius: 10px;
-        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
-        text-align: center;
-    }
-    h1, h2, h3 {
         color: #2c3e50;
+        box-shadow: 0 4px 6px rgba(0,0,0,0.05);
     }
+
+    /* Titles and text */
+    h1, h2, h3 { color: #2c3e50; font-family: 'Segoe UI', sans-serif; }
+    
+    /* Right-to-Left support for Arabic */
+    .rtl { direction: rtl; text-align: right; }
     </style>
 """, unsafe_allow_html=True)
 
 # -----------------------------------------------------------------------------
-# 2. CORE LOGIC
+# 2. SESSION STATE MANAGEMENT (The Memory)
+# -----------------------------------------------------------------------------
+if 'library' not in st.session_state:
+    st.session_state.library = {}  # Stores analyzed data: {file_id: data_dict}
+if 'current_file_id' not in st.session_state:
+    st.session_state.current_file_id = None
+
+# -----------------------------------------------------------------------------
+# 3. HELPER FUNCTIONS
 # -----------------------------------------------------------------------------
 
-def get_working_model_name():
-    """Finds the best available model for the user's API key."""
+def get_file_hash(file_bytes):
+    """Creates a unique ID for a file so we don't re-analyze it."""
+    return hashlib.md5(file_bytes).hexdigest()
+
+def extract_text(uploaded_file):
     try:
-        models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
-        if not models: return None, "No models found."
-        
-        # Priority list
-        priority = ['models/gemini-1.5-pro', 'models/gemini-1.5-flash', 'models/gemini-pro']
-        for p in priority:
-            if p in models: return p, "OK"
-        return models[0], "OK"
-    except Exception as e:
-        return None, str(e)
+        reader = pypdf.PdfReader(uploaded_file)
+        text = ""
+        for page in reader.pages:
+            content = page.extract_text()
+            if content: text += content + "\n"
+        return text
+    except:
+        return None
 
-def extract_text_from_pdfs(uploaded_files):
-    combined_text = ""
-    total_pages = 0
-    
-    for uploaded_file in uploaded_files:
-        try:
-            reader = pypdf.PdfReader(uploaded_file)
-            file_text = ""
-            for page in reader.pages:
-                content = page.extract_text()
-                if content:
-                    file_text += content + "\n"
-            if file_text:
-                combined_text += f"\n--- SOURCE: {uploaded_file.name} ---\n{file_text}"
-                total_pages += len(reader.pages)
-        except:
-            pass
-            
-    return combined_text, total_pages
-
-def clean_json_string(json_str):
+def clean_json(json_str):
     json_str = re.sub(r'```json', '', json_str)
     json_str = re.sub(r'```', '', json_str)
     return json_str.strip()
 
-def analyze_with_ai(api_key, text):
+def get_language_prompts(lang_code):
+    """Returns UI text and AI prompts based on selected language."""
+    prompts = {
+        "English": {
+            "role": "You are a strict Exam Tutor. Output answers in English where appropriate.",
+            "ui_upload": "Upload PDF Exams",
+            "ui_analyze": "Analyze File",
+            "tabs": ["📖 Reading", "🎧 Listening", "✍️ Writing", "🗣️ Speaking", "🧩 Grammar"],
+            "keys": ["Reading", "Listening", "Writing", "Speaking", "Grammar"]
+        },
+        "Deutsch": {
+            "role": "Du bist ein strenger Deutschlehrer. Antworte auf Deutsch.",
+            "ui_upload": "PDF-Prüfungen hochladen",
+            "ui_analyze": "Datei analysieren",
+            "tabs": ["📖 Lesen", "🎧 Hören", "✍️ Schreiben", "🗣️ Sprechen", "🧩 Grammatik"],
+            "keys": ["Reading", "Listening", "Writing", "Speaking", "Grammar"]
+        },
+        "Français": {
+            "role": "Tu es un professeur expert. Réponds en français.",
+            "ui_upload": "Télécharger des examens PDF",
+            "ui_analyze": "Analyser le fichier",
+            "tabs": ["📖 Lecture", "🎧 Écoute", "✍️ Écriture", "🗣️ Oral", "🧩 Grammaire"],
+            "keys": ["Reading", "Listening", "Writing", "Speaking", "Grammar"]
+        },
+        "العربية": {
+            "role": "أنت معلم خبير للامتحانات. اشرح وقدم الإجابات باللغة العربية.",
+            "ui_upload": "تحميل ملفات PDF",
+            "ui_analyze": "تحليل الملف",
+            "tabs": ["📖 القراءة", "🎧 الاستماع", "✍️ الكتابة", "🗣️ التحدث", "🧩 القواعد"],
+            "keys": ["Reading", "Listening", "Writing", "Speaking", "Grammar"]
+        }
+    }
+    return prompts.get(lang_code, prompts["English"])
+
+def analyze_single_file(api_key, text, lang_config, lang_name):
+    """Deep analysis of a single file."""
     genai.configure(api_key=api_key)
-    model_name, status = get_working_model_name()
     
-    if not model_name:
-        return None, f"API Error: {status}"
-        
-    model = genai.GenerativeModel(model_name)
-    
-    # Updated Prompt for Exercise Extraction
+    # Smart Model Selection
+    try:
+        models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
+        model_name = 'models/gemini-1.5-flash' if 'models/gemini-1.5-flash' in models else models[0]
+        model = genai.GenerativeModel(model_name)
+    except:
+        return None, "API Connection Failed. Check Key."
+
+    # The Prompt
     prompt = f"""
-    Role: Senior German B2 Exam Tutor (Goethe/Telc).
-    Task: deeply analyze the provided text.
+    {lang_config['role']}
+    Target Language for Explanations: {lang_name}
     
-    REQUIREMENTS:
-    1. Identify the section (Reading, Listening, Writing, Speaking).
-    2. Extract specific **Exercises** found in the text.
-    3. If answers are in the text (key), use them. If not, SOLVE the exercise yourself.
-    
-    OUTPUT FORMAT: Return ONLY valid JSON.
+    TASK: Analyze the provided text (Exam PDF) and extract exercises, vocab, and strategies.
+    Distinguish between Reading, Listening, Writing, Speaking, and Grammar sections.
+
+    OUTPUT: Returns ONLY valid JSON with this exact structure:
     {{
-        "Lesen": {{
-            "Stats": "e.g., 2 Texts analyzed",
-            "CheatSheet": "markdown bullets of vocab",
-            "Mnemonics": "strategy string",
-            "Traps": "common mistakes",
-            "Exercises": [
-                {{ "Question": "Brief context or question text", "Answer": "The correct answer with brief explanation" }},
-                {{ "Question": "...", "Answer": "..." }}
-            ]
-        }},
-        "Hören": {{ ... same structure ... }},
-        "Schreiben": {{ ... same structure ... }},
-        "Sprechen": {{ ... same structure ... }}
+        "Reading": {{ "Summary": "text", "Vocab": ["word - definition"], "Exercises": [{{ "Q": "Question text", "A": "Answer text", "Tip": "Strategy tip" }}] }},
+        "Listening": {{ "Summary": "text", "Vocab": [], "Exercises": [{{ "Q": "...", "A": "...", "Tip": "..." }}] }},
+        "Writing": {{ "Summary": "text", "Vocab": [], "Exercises": [{{ "Q": "Topic...", "A": "Sample Answer...", "Tip": "Structure tip" }}] }},
+        "Speaking": {{ "Summary": "text", "Vocab": [], "Exercises": [{{ "Q": "Topic...", "A": "Key points...", "Tip": "..." }}] }},
+        "Grammar": {{ "Summary": "text", "Topics": ["Topic 1", "Topic 2"], "Exercises": [{{ "Q": "Fill in blank...", "A": "Correct answer", "Tip": "Rule explanation" }}] }}
     }}
-    
-    INPUT TEXT (Truncated for context):
+
+    If a section is missing in the text, leave the arrays empty but keep the keys.
+    Analyze the following text (truncated to 30k chars):
     {text[:30000]}
     """
     
@@ -136,92 +175,128 @@ def analyze_with_ai(api_key, text):
         return None, str(e)
 
 # -----------------------------------------------------------------------------
-# 3. UI LAYOUT
+# 4. MAIN APPLICATION
 # -----------------------------------------------------------------------------
 
 def main():
-    # --- SIDEBAR ---
+    # --- Sidebar Configuration ---
     with st.sidebar:
-        st.header("⚙️ Settings")
-        api_key = st.text_input("Google API Key", type="password", help="Get one from aistudio.google.com")
-        st.divider()
-        st.info("💡 **Tip:** Upload chapters or single practice tests for the best extraction accuracy.")
-        st.caption("v2.0 | Modern UI Edition")
-
-    # --- MAIN HEADER ---
-    col1, col2 = st.columns([3, 1])
-    with col1:
-        st.title("🇩🇪 Pro B2 Exam Tutor")
-        st.markdown("**AI-Powered Analysis, Strategy & Exercise Solver**")
-    with col2:
-        st.image("https://img.icons8.com/color/96/germany.png", width=60)
-
-    # --- UPLOAD SECTION ---
-    uploaded_files = st.file_uploader("", type="pdf", accept_multiple_files=True, help="Drop your B2 PDFs here")
-
-    if uploaded_files and api_key:
-        if st.button("🚀 Analyze & Solve", use_container_width=True, type="primary"):
-            
-            with st.status("Processing documents...", expanded=True) as status:
-                st.write("📂 Reading PDFs...")
-                raw_text, page_count = extract_text_from_pdfs(uploaded_files)
-                
-                if page_count > 0:
-                    st.write("🧠 Consulting AI Tutor...")
-                    json_str, error = analyze_with_ai(api_key, raw_text)
-                    
-                    if error:
-                        status.update(label="Error!", state="error")
-                        st.error(error)
-                    else:
-                        try:
-                            data = json.loads(clean_json_string(json_str))
-                            status.update(label="Analysis Complete!", state="complete")
-                            
-                            # --- RESULTS DISPLAY ---
-                            st.divider()
-                            
-                            # Tabs
-                            tabs = st.tabs(["📖 Lesen (Reading)", "🎧 Hören (Listening)", "✍️ Schreiben (Writing)", "🗣️ Sprechen (Speaking)"])
-                            sections = ["Lesen", "Hören", "Schreiben", "Sprechen"]
-                            
-                            for i, tab in enumerate(tabs):
-                                section_key = sections[i]
-                                with tab:
-                                    if section_key in data:
-                                        content = data[section_key]
-                                        
-                                        # Top Info Cards
-                                        c1, c2, c3 = st.columns(3)
-                                        with c1: st.info(f"**Strategy:**\n{content.get('Mnemonics', 'N/A')}")
-                                        with c2: st.warning(f"**Traps:**\n{content.get('Traps', 'N/A')}")
-                                        with c3: st.success(f"**Focus:**\n{content.get('Stats', 'General Analysis')}")
-                                        
-                                        st.markdown("### 📝 Vocabulary & Phrases")
-                                        with st.expander("View Cheat Sheet", expanded=False):
-                                            st.markdown(content.get("CheatSheet", "No data found."))
-
-                                        st.markdown("### 🧩 Extracted Exercises & Answers")
-                                        exercises = content.get("Exercises", [])
-                                        
-                                        if exercises:
-                                            for idx, ex in enumerate(exercises):
-                                                with st.expander(f"Exercise {idx+1}: {ex.get('Question', '')[:50]}..."):
-                                                    st.markdown(f"**❓ Question / Context:**\n\n{ex.get('Question', 'N/A')}")
-                                                    st.divider()
-                                                    st.markdown(f"**✅ Solution:**\n\n{ex.get('Answer', 'N/A')}")
-                                        else:
-                                            st.caption("No specific exercises detected in this section.")
-                                    else:
-                                        st.warning(f"No content detected for {section_key}")
+        st.image("https://img.icons8.com/3d-fluency/94/brain.png", width=80)
+        st.title("Ultra Tutor AI")
+        
+        # Language Selector
+        selected_lang = st.selectbox("Interface Language / Sprache / اللغة", 
+                                     ["English", "Deutsch", "Français", "العربية"])
+        
+        config = get_language_prompts(selected_lang)
+        is_rtl = selected_lang == "العربية"
+        
+        # API Key
+        api_key = st.text_input("Google API Key", type="password")
+        
+        st.markdown("---")
+        
+        # File Uploader
+        uploaded_files = st.file_uploader(config["ui_upload"], type="pdf", accept_multiple_files=True)
+        
+        # Processing Logic
+        if uploaded_files and api_key:
+            if st.button(config["ui_analyze"], type="primary", use_container_width=True):
+                with st.spinner("Processing... / Verarbeite... / جاري المعالجة..."):
+                    for up_file in uploaded_files:
+                        # 1. Read File
+                        file_bytes = up_file.getvalue()
+                        file_hash = get_file_hash(file_bytes)
                         
-                        except json.JSONDecodeError:
-                            st.error("The AI response was not valid JSON. Please try again with a smaller file.")
-                else:
-                    st.error("Could not read text from the uploaded files.")
+                        # Only process if not already in library
+                        if file_hash not in st.session_state.library:
+                            text = extract_text(up_file)
+                            if text:
+                                json_res, err = analyze_single_file(api_key, text, config, selected_lang)
+                                if json_res:
+                                    try:
+                                        data = json.loads(clean_json(json_res))
+                                        # Save to Library
+                                        st.session_state.library[file_hash] = {
+                                            "name": up_file.name,
+                                            "data": data,
+                                            "lang": selected_lang
+                                        }
+                                    except:
+                                        st.error(f"Failed to parse {up_file.name}")
+                    st.success(f"Library Updated! {len(st.session_state.library)} Files ready.")
 
-    elif not api_key:
-        st.info("👈 Please enter your Google API Key in the sidebar to start.")
+    # --- Main Content Area ---
+    
+    # 1. Library Grid (If no file selected or just landing)
+    if not st.session_state.library:
+        st.markdown(f"""
+        <div class="glass-card" style="text-align: center; padding: 50px;">
+            <h2 style='font-size: 30px;'>👋 Welcome to Ultra Tutor</h2>
+            <p style='color: #666;'>Upload your PDF Exams to create an interactive study hub.</p>
+            <p style='color: #888; font-size: 0.9em;'>Supports Goethe, Telc, DALF, TOEFL and more.</p>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    else:
+        # File Selector (The "Organizer")
+        file_options = {v['name']: k for k, v in st.session_state.library.items()}
+        selected_name = st.selectbox("📚 Select Document / Wähle ein Dokument / اختر ملف", list(file_options.keys()))
+        
+        if selected_name:
+            file_id = file_options[selected_name]
+            file_data = st.session_state.library[file_id]["data"]
+            
+            st.markdown(f"<div class='glass-card'><h2>📄 {selected_name}</h2></div>", unsafe_allow_html=True)
+            
+            # Display Tabs
+            tabs = st.tabs(config["tabs"])
+            keys = config["keys"] # Reading, Listening, etc.
+            
+            for i, tab in enumerate(tabs):
+                section_key = keys[i]
+                with tab:
+                    if section_key in file_data:
+                        sec_content = file_data[section_key]
+                        
+                        # Summary Section
+                        st.markdown(f"""
+                        <div class="glass-card" {'class="rtl"' if is_rtl else ''}>
+                            <h4 style="margin-top:0;">📌 Summary / Überblick / ملخص</h4>
+                            {sec_content.get('Summary', 'No summary available.')}
+                        </div>
+                        """, unsafe_allow_html=True)
+                        
+                        # Vocab Section
+                        vocab = sec_content.get("Vocab", [])
+                        if vocab:
+                            with st.expander("📝 Vocabulary List / Wortschatz / المفردات"):
+                                for v in vocab:
+                                    st.markdown(f"- {v}")
+                        
+                        # Interactive Exercises
+                        exercises = sec_content.get("Exercises", [])
+                        if exercises:
+                            st.subheader("🧩 Exercises / Übungen / التمارين")
+                            for idx, ex in enumerate(exercises):
+                                # Using container for visual separation
+                                with st.container():
+                                    st.markdown(f"**Q{idx+1}:** {ex.get('Q', '')}")
+                                    
+                                    # Tip Toggle
+                                    if 'Tip' in ex and ex['Tip']:
+                                        if st.toggle(f"💡 Hint/Tipp {idx+1}", key=f"tip_{file_id}_{section_key}_{idx}"):
+                                            st.info(ex['Tip'])
+                                            
+                                    # Answer Toggle
+                                    if st.button(f"👁️ Reveal Answer {idx+1}", key=f"ans_{file_id}_{section_key}_{idx}"):
+                                        st.success(f"✅ {ex.get('A', '')}")
+                                    
+                                    st.divider()
+                        else:
+                            st.info("No specific exercises detected for this section.")
+                    else:
+                        st.warning("No data found for this section.")
 
 if __name__ == "__main__":
     main()
