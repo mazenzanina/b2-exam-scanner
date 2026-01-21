@@ -5,6 +5,7 @@ import json
 import re
 import hashlib
 import time
+import random
 
 # -----------------------------------------------------------------------------
 # 1. PAGE CONFIGURATION
@@ -17,15 +18,15 @@ st.set_page_config(
 )
 
 # -----------------------------------------------------------------------------
-# 2. MODERN UI (CSS)
+# 2. CSS STYLING (Dark Mode Proof)
 # -----------------------------------------------------------------------------
 st.markdown("""
     <style>
-    /* Background */
+    /* Background Gradient */
     .stApp {
-        background: linear-gradient(to right, #E2E2E2, #C9D6FF);
+        background: linear-gradient(to right, #E0EAFC, #CFDEF3);
     }
-
+    
     /* Glass Card */
     .glass-card {
         background: rgba(255, 255, 255, 0.95) !important;
@@ -35,8 +36,8 @@ st.markdown("""
         padding: 30px;
         margin-bottom: 25px;
     }
-
-    /* Text Color Enforcer (Dark Grey) */
+    
+    /* Text Color Enforcer (Always Dark Grey) */
     .glass-card h1, .glass-card h2, .glass-card h3, .glass-card h4, 
     .glass-card p, .glass-card li, .glass-card span, .glass-card div {
         color: #2D3748 !important; 
@@ -50,11 +51,13 @@ st.markdown("""
         padding: 10px 24px;
         border-radius: 50px;
         font-weight: 600;
+        transition: all 0.3s ease;
     }
     div.stButton > button:hover {
         background: linear-gradient(90deg, #182848 0%, #4b6cb7 100%);
-        color: white;
         transform: translateY(-2px);
+        box-shadow: 0 5px 15px rgba(0,0,0,0.2);
+        color: white;
     }
 
     /* Tabs */
@@ -92,23 +95,14 @@ def extract_text(uploaded_file):
     except: return None
 
 def robust_json_extractor(text):
-    """
-    Surgically extracts JSON object from text containing other chatty output.
-    Finds the first '{' and the last '}'.
-    """
+    """Finds valid JSON within AI chatter."""
     try:
         if not text: return None
-        # Find start and end of JSON structure
         start = text.find('{')
         end = text.rfind('}') + 1
-        
-        if start == -1 or end == 0:
-            return None
-            
-        json_str = text[start:end]
-        return json.loads(json_str)
-    except json.JSONDecodeError:
-        return None
+        if start == -1 or end == 0: return None
+        return json.loads(text[start:end])
+    except: return None
 
 def get_prompts(lang_code):
     conf = {
@@ -143,32 +137,62 @@ def get_prompts(lang_code):
     }
     return conf.get(lang_code, conf["English"])
 
-def analyze_content(api_key, text, sys_prompt):
+def analyze_content_with_retry(api_key, text, sys_prompt, status_container):
+    """
+    Tries to generate content. If 429 Quota Exceeded occurs, 
+    it waits and retries automatically.
+    """
     genai.configure(api_key=api_key)
+    
+    # Smart Model Selection (Prefer 1.5-Flash for stability)
     try:
-        models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
-        model_name = 'models/gemini-1.5-flash' if 'models/gemini-1.5-flash' in models else models[0]
+        available_models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
+        if 'models/gemini-1.5-flash' in available_models:
+            model_name = 'models/gemini-1.5-flash'
+        else:
+            model_name = available_models[0]
+        
         model = genai.GenerativeModel(model_name)
-        
-        prompt = f"""
-        {sys_prompt}
-        TASK: Identify category (Study, Work, Novel, Travel, etc.). Extract structured data.
-        
-        CRITICAL: Return ONLY valid JSON. No markdown formatting.
-        
-        OUTPUT FORMAT:
-        {{
-            "Category": "Short Category Name",
-            "Overview": {{ "Title": "Txt", "Summary": "Txt", "Tags": ["Tag1", "Tag2"] }},
-            "Insights": ["Point 1", "Point 2", "Point 3"],
-            "Actionable": {{ "Items": ["To-Do 1"], "Quiz": [ {{"Q": "Txt", "A": "Txt"}} ] }}
-        }}
-        TEXT: {text[:30000]}
-        """
-        response = model.generate_content(prompt)
-        return response.text
     except Exception as e:
-        return f"API_ERROR: {str(e)}"
+        return f"API_ERROR: Model selection failed - {str(e)}"
+
+    prompt = f"""
+    {sys_prompt}
+    TASK: Identify category (Study, Work, Novel, Travel, etc.). Extract structured data.
+    CRITICAL: Return ONLY valid JSON.
+    OUTPUT FORMAT:
+    {{
+        "Category": "Short Category Name",
+        "Overview": {{ "Title": "Txt", "Summary": "Txt", "Tags": ["Tag1", "Tag2"] }},
+        "Insights": ["Point 1", "Point 2", "Point 3"],
+        "Actionable": {{ "Items": ["To-Do 1"], "Quiz": [ {{"Q": "Txt", "A": "Txt"}} ] }}
+    }}
+    TEXT: {text[:25000]}
+    """
+
+    max_retries = 3
+    retry_delay = 20 # seconds
+
+    for attempt in range(max_retries):
+        try:
+            response = model.generate_content(prompt)
+            return response.text
+        except Exception as e:
+            error_msg = str(e)
+            if "429" in error_msg:
+                if attempt < max_retries - 1:
+                    # Show countdown in UI
+                    for s in range(retry_delay, 0, -1):
+                        status_container.warning(f"⚠️ API Rate Limit Hit. Cooling down... Retrying in {s}s")
+                        time.sleep(1)
+                    status_container.info("♻️ Retrying now...")
+                    continue # Try again
+                else:
+                    return f"API_ERROR: Quota Exceeded (429). Please try fewer files or wait a minute."
+            else:
+                return f"API_ERROR: {error_msg}"
+    
+    return "API_ERROR: Unknown failure"
 
 def ask_chat(api_key, history, context, question, sys_prompt):
     genai.configure(api_key=api_key)
@@ -185,7 +209,6 @@ def ask_chat(api_key, history, context, question, sys_prompt):
 # -----------------------------------------------------------------------------
 def main():
     
-    # -- TOP BAR --
     c1, c2 = st.columns([4, 1])
     with c1: 
         st.markdown("<h1 style='color: #1a202c;'>🧠 Universal AI Brain</h1>", unsafe_allow_html=True)
@@ -195,39 +218,35 @@ def main():
     config = get_prompts(lang)
     is_rtl = lang == "العربية"
     
-    # -- SETTINGS --
     with st.expander("🔐 AI Settings (API Key)", expanded=False):
         api_key = st.text_input("Enter Google API Key", type="password")
 
-    # -- UPLOAD --
     st.markdown(f"### {config['ui_desc']}")
     uploaded_files = st.file_uploader("", type=["pdf"], accept_multiple_files=True)
     
-    # -- ANALYZE BUTTON --
     if uploaded_files and api_key:
         if st.button(config["btn_label"], use_container_width=True):
             
-            status_text = st.empty()
+            status_container = st.empty()
             progress_bar = st.progress(0)
-            
             processed_count = 0
             errors = []
             
             with st.spinner("Initializing Neural Core..."):
-                total_files = len(uploaded_files)
-                
+                total = len(uploaded_files)
                 for idx, up_file in enumerate(uploaded_files):
+                    
                     f_hash = get_file_hash(up_file.getvalue())
                     
                     if f_hash not in st.session_state.library:
-                        status_text.markdown(f"**📄 Reading file: {up_file.name}...**")
+                        status_container.markdown(f"**📄 Reading file {idx+1}/{total}: {up_file.name}...**")
                         txt = extract_text(up_file)
-                        progress_bar.progress((idx * 30) // total_files + 10)
                         
                         if txt:
-                            status_text.markdown(f"**🧠 Analyzing: {up_file.name}...**")
-                            raw_response = analyze_content(api_key, txt, config["sys_prompt"])
-                            progress_bar.progress((idx * 70) // total_files + 30)
+                            status_container.markdown(f"**🧠 Analyzing: {up_file.name}...**")
+                            
+                            # Use the new Retry-Enabled Analysis
+                            raw_response = analyze_content_with_retry(api_key, txt, config["sys_prompt"], status_container)
                             
                             if raw_response and "API_ERROR" not in raw_response:
                                 data = robust_json_extractor(raw_response)
@@ -238,28 +257,27 @@ def main():
                                     }
                                     processed_count += 1
                                 else:
-                                    errors.append(f"JSON Parse Error in {up_file.name}. Raw Output: {raw_response[:100]}...")
+                                    errors.append(f"Parse Error in {up_file.name}")
                             else:
-                                errors.append(f"API Error in {up_file.name}: {raw_response}")
+                                errors.append(raw_response)
                         else:
-                            errors.append(f"Could not read text from {up_file.name}")
+                            errors.append(f"Unreadable PDF: {up_file.name}")
                     else:
-                        processed_count += 1 # Already exists, count as success
-                        
-                progress_bar.progress(100)
+                        processed_count += 1
+                    
+                    progress_bar.progress((idx + 1) / total)
+                    time.sleep(1) # Small safety buffer between files
                 
                 if processed_count > 0:
-                    status_text.success(f"✅ Analysis Complete! {processed_count} files ready.")
+                    status_container.success(f"✅ Success! {processed_count} files ready.")
                     time.sleep(1)
                     st.rerun()
                 else:
-                    status_text.error("❌ Analysis Failed. See details below.")
-                    if errors:
-                        for e in errors: st.error(e)
+                    status_container.error("❌ Process Failed.")
+                    for e in errors: st.error(e)
 
     st.markdown("---")
 
-    # -- LIBRARY VIEW --
     if not st.session_state.library:
         st.info("👋 Ready. Upload a PDF to begin.")
     
@@ -273,7 +291,6 @@ def main():
             data = f_obj["data"]
             cat = data.get("Category", "General")
             
-            # HEADER
             st.markdown(f"""
             <div class="glass-card">
                 <span style="background:#4b6cb7; color:white; padding:5px 15px; border-radius:20px; font-size:0.85em; font-weight:bold;">{cat.upper()}</span>
@@ -282,7 +299,6 @@ def main():
             </div>
             """, unsafe_allow_html=True)
             
-            # TABS
             t1, t2, t3, t4 = st.tabs(config["tabs"])
             
             with t1:
@@ -308,7 +324,7 @@ def main():
                 
                 if act.get("Quiz"):
                     st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
-                    st.subheader("🧠 Quiz / Knowledge Check")
+                    st.subheader("🧠 Quiz")
                     for i, q in enumerate(act["Quiz"]):
                         with st.expander(f"Q{i+1}: {q.get('Q','?')}"): st.info(f"Answer: {q.get('A','')}")
                     st.markdown("</div>", unsafe_allow_html=True)
@@ -318,7 +334,7 @@ def main():
                 for m in f_obj["chat_history"]:
                     with st.chat_message(m["role"]): st.write(m["content"])
                 
-                if prompt := st.chat_input("Type your question..."):
+                if prompt := st.chat_input("Type question..."):
                     f_obj["chat_history"].append({"role": "user", "content": prompt})
                     with st.chat_message("user"): st.write(prompt)
                     
