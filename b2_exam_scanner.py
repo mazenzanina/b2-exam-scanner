@@ -5,79 +5,216 @@ import json
 import re
 import hashlib
 import time
-import random
 
 # -----------------------------------------------------------------------------
 # 1. PAGE CONFIGURATION
 # -----------------------------------------------------------------------------
 st.set_page_config(
-    page_title="Universal AI Brain",
-    page_icon="🧠",
-    layout="wide",
+    page_title="AI Assistant",
+    page_icon="🤖",
+    layout="centered", # Centered layout matches mobile app view better
     initial_sidebar_state="collapsed"
 )
 
 # -----------------------------------------------------------------------------
-# 2. CSS STYLING (Dark Mode Proof)
+# 2. HOLO-BLUE UI (CSS)
 # -----------------------------------------------------------------------------
 st.markdown("""
     <style>
-    /* Background Gradient */
+    /* 1. THE BACKGROUND GRADIENT (Deep Blue to White) */
     .stApp {
-        background: linear-gradient(to right, #E0EAFC, #CFDEF3);
-    }
-    
-    /* Glass Card */
-    .glass-card {
-        background: rgba(255, 255, 255, 0.95) !important;
-        border-radius: 20px;
-        box-shadow: 0 8px 32px 0 rgba(31, 38, 135, 0.15);
-        border: 1px solid rgba(255, 255, 255, 0.18);
-        padding: 30px;
-        margin-bottom: 25px;
-    }
-    
-    /* Text Color Enforcer (Always Dark Grey) */
-    .glass-card h1, .glass-card h2, .glass-card h3, .glass-card h4, 
-    .glass-card p, .glass-card li, .glass-card span, .glass-card div {
-        color: #2D3748 !important; 
-    }
-    
-    /* Buttons */
-    div.stButton > button {
-        background: linear-gradient(90deg, #4b6cb7 0%, #182848 100%);
-        color: white;
-        border: none;
-        padding: 10px 24px;
-        border-radius: 50px;
-        font-weight: 600;
-        transition: all 0.3s ease;
-    }
-    div.stButton > button:hover {
-        background: linear-gradient(90deg, #182848 0%, #4b6cb7 100%);
-        transform: translateY(-2px);
-        box-shadow: 0 5px 15px rgba(0,0,0,0.2);
-        color: white;
+        background: linear-gradient(180deg, #4c6ef5 0%, #859df9 40%, #dbe4ff 75%, #ffffff 100%);
+        background-attachment: fixed;
     }
 
-    /* Tabs */
-    .stTabs [data-baseweb="tab-list"] {
-        background: rgba(255,255,255,0.8);
-        border-radius: 50px;
-        padding: 8px;
-        gap: 8px;
-    }
-    .stTabs [data-baseweb="tab"][aria-selected="true"] {
-        background-color: #2b6cb0;
+    /* 2. HIDE DEFAULT STREAMLIT ELEMENTS */
+    header {visibility: hidden;}
+    footer {visibility: hidden;}
+    [data-testid="stToolbar"] {visibility: hidden;}
+    
+    /* 3. TYPOGRAPHY */
+    h1 {
         color: white !important;
+        font-family: 'Helvetica Neue', sans-serif;
+        font-weight: 700;
+        font-size: 2.5rem !important;
+        text-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        margin-bottom: 10px !important;
+    }
+    p {
+        color: rgba(255, 255, 255, 0.9) !important;
+        font-size: 1.1rem !important;
+        line-height: 1.5;
+    }
+
+    /* 4. THE 3D ROBOT AVATAR & GLOW */
+    .robot-container {
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        position: relative;
+        height: 300px;
+        margin-top: 20px;
     }
     
-    .rtl { direction: rtl; text-align: right; }
+    .glow-circle {
+        position: absolute;
+        width: 180px;
+        height: 180px;
+        background: radial-gradient(circle, rgba(255,255,255,0.4) 0%, rgba(255,255,255,0) 70%);
+        border-radius: 50%;
+        z-index: 1;
+        animation: pulse 3s infinite;
+    }
+    
+    @keyframes pulse {
+        0% { transform: scale(0.95); opacity: 0.7; }
+        50% { transform: scale(1.1); opacity: 1; }
+        100% { transform: scale(0.95); opacity: 0.7; }
+    }
+
+    .robot-img {
+        width: 120px;
+        height: 120px;
+        z-index: 2;
+        border-radius: 50%;
+        background: white;
+        padding: 10px;
+        box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+    }
+
+    /* 5. FLOATING BUBBLES */
+    .floating-bubble {
+        position: absolute;
+        background: rgba(255, 255, 255, 0.25);
+        backdrop-filter: blur(10px);
+        -webkit-backdrop-filter: blur(10px);
+        border-radius: 50%;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        align-items: center;
+        color: white;
+        font-size: 0.8rem;
+        box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+        border: 1px solid rgba(255,255,255,0.3);
+        animation: float 4s ease-in-out infinite;
+    }
+
+    .bubble-left {
+        width: 90px;
+        height: 90px;
+        top: 40px;
+        left: 20px;
+        animation-delay: 0s;
+    }
+    
+    .bubble-right {
+        width: 100px;
+        height: 100px;
+        bottom: 40px;
+        right: 20px;
+        animation-delay: 2s;
+    }
+
+    @keyframes float {
+        0% { transform: translateY(0px); }
+        50% { transform: translateY(-10px); }
+        100% { transform: translateY(0px); }
+    }
+
+    /* 6. SPEECH BUBBLE (CTA) */
+    .speech-bubble {
+        position: absolute;
+        top: 20px;
+        right: 50px;
+        background: white;
+        color: #4c6ef5;
+        padding: 10px 20px;
+        border-radius: 20px;
+        font-weight: bold;
+        font-size: 0.9rem;
+        box-shadow: 0 4px 10px rgba(0,0,0,0.1);
+        z-index: 5;
+        cursor: pointer;
+    }
+    .speech-bubble:after {
+        content: '';
+        position: absolute;
+        bottom: 0;
+        left: 50%;
+        width: 0;
+        height: 0;
+        border: 10px solid transparent;
+        border-top-color: white;
+        border-bottom: 0;
+        margin-left: -10px;
+        margin-bottom: -10px;
+    }
+
+    /* 7. PREMIUM BUTTONS */
+    .premium-card {
+        background: linear-gradient(90deg, #2b3a6e 0%, #4c6ef5 100%);
+        border-radius: 30px;
+        padding: 15px;
+        color: white;
+        text-align: center;
+        margin: 20px 0;
+        box-shadow: 0 10px 25px rgba(76, 110, 245, 0.4);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 10px;
+        font-weight: bold;
+    }
+    
+    .pro-button {
+        background: rgba(255, 255, 255, 0.2);
+        border-radius: 30px;
+        padding: 10px 20px;
+        color: #333;
+        text-align: center;
+        font-weight: bold;
+        backdrop-filter: blur(5px);
+        margin-bottom: 20px;
+        display: inline-block;
+        border: 1px solid rgba(255,255,255,0.4);
+    }
+
+    /* 8. INPUT FIELD (Floating Pill) */
+    .stChatInput {
+        position: fixed;
+        bottom: 30px;
+        left: 50%;
+        transform: translateX(-50%);
+        width: 90%;
+        max-width: 600px;
+        z-index: 100;
+    }
+    .stChatInputContainer {
+        background-color: white;
+        border-radius: 30px !important;
+        box-shadow: 0 5px 20px rgba(0,0,0,0.1);
+        padding: 5px;
+        border: none;
+    }
+    .stChatInputContainer textarea {
+        color: #333;
+    }
+
+    /* 9. FILE UPLOADER STYLING (Hidden inside bubble concept) */
+    [data-testid="stFileUploader"] {
+        background: white;
+        border-radius: 20px;
+        padding: 20px;
+        text-align: center;
+        box-shadow: 0 10px 30px rgba(0,0,0,0.1);
+    }
     </style>
 """, unsafe_allow_html=True)
 
 # -----------------------------------------------------------------------------
-# 3. CORE LOGIC
+# 3. LOGIC & STATE
 # -----------------------------------------------------------------------------
 if 'library' not in st.session_state: st.session_state.library = {} 
 
@@ -95,7 +232,6 @@ def extract_text(uploaded_file):
     except: return None
 
 def robust_json_extractor(text):
-    """Finds valid JSON within AI chatter."""
     try:
         if not text: return None
         start = text.find('{')
@@ -104,100 +240,33 @@ def robust_json_extractor(text):
         return json.loads(text[start:end])
     except: return None
 
-def get_prompts(lang_code):
-    conf = {
-        "English": {
-            "sys_prompt": "You are a Universal AI Assistant. Analyze text context (Study, Work, Travel?). Answer in English.",
-            "ui_desc": "Upload Documents (PDF)",
-            "tabs": ["📊 Overview", "💡 Insights", "✅ Action Items", "💬 Chat"],
-            "chat_welcome": "Document loaded. Ask me anything!",
-            "btn_label": "✨ Analyze Files"
-        },
-        "Deutsch": {
-            "sys_prompt": "Du bist ein universeller KI-Assistent. Analysiere den Kontext. Antworte auf Deutsch.",
-            "ui_desc": "Dokumente hochladen (PDF)",
-            "tabs": ["📊 Überblick", "💡 Erkenntnisse", "✅ Aufgaben", "💬 Chat"],
-            "chat_welcome": "Dokument geladen. Frag mich etwas!",
-            "btn_label": "✨ Analysieren"
-        },
-        "Français": {
-            "sys_prompt": "Tu es un assistant IA. Analyse le contexte. Réponds en français.",
-            "ui_desc": "Télécharger des documents (PDF)",
-            "tabs": ["📊 Aperçu", "💡 Idées", "✅ Actions", "💬 Chat"],
-            "chat_welcome": "Document chargé. Posez une question !",
-            "btn_label": "✨ Analyser"
-        },
-        "العربية": {
-            "sys_prompt": "أنت مساعد ذكي. حلل السياق. أجب باللغة العربية.",
-            "ui_desc": "تحميل الملفات (PDF)",
-            "tabs": ["📊 نظرة عامة", "💡 أفكار", "✅ مهام", "💬 محادثة"],
-            "chat_welcome": "تم تحميل الملف. اسألني أي شيء!",
-            "btn_label": "✨ تحليل الملفات"
-        }
-    }
-    return conf.get(lang_code, conf["English"])
-
-def analyze_content_with_retry(api_key, text, sys_prompt, status_container):
-    """
-    Tries to generate content. If 429 Quota Exceeded occurs, 
-    it waits and retries automatically.
-    """
+def analyze_content(api_key, text):
     genai.configure(api_key=api_key)
-    
-    # Smart Model Selection (Prefer 1.5-Flash for stability)
     try:
-        available_models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
-        if 'models/gemini-1.5-flash' in available_models:
-            model_name = 'models/gemini-1.5-flash'
-        else:
-            model_name = available_models[0]
-        
+        models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
+        model_name = 'models/gemini-1.5-flash' if 'models/gemini-1.5-flash' in models else models[0]
         model = genai.GenerativeModel(model_name)
-    except Exception as e:
-        return f"API_ERROR: Model selection failed - {str(e)}"
+        
+        prompt = f"""
+        You are a Universal AI Assistant.
+        TASK: Identify category (Study, Work, Novel, Travel). Extract structured data.
+        OUTPUT JSON ONLY:
+        {{
+            "Category": "Short Name",
+            "Overview": {{ "Title": "Txt", "Summary": "Txt" }},
+            "Insights": ["Point 1", "Point 2"],
+            "Actionable": {{ "Items": ["To-Do 1"] }}
+        }}
+        TEXT: {text[:25000]}
+        """
+        response = model.generate_content(prompt)
+        return response.text
+    except Exception as e: return f"API_ERROR: {str(e)}"
 
-    prompt = f"""
-    {sys_prompt}
-    TASK: Identify category (Study, Work, Novel, Travel, etc.). Extract structured data.
-    CRITICAL: Return ONLY valid JSON.
-    OUTPUT FORMAT:
-    {{
-        "Category": "Short Category Name",
-        "Overview": {{ "Title": "Txt", "Summary": "Txt", "Tags": ["Tag1", "Tag2"] }},
-        "Insights": ["Point 1", "Point 2", "Point 3"],
-        "Actionable": {{ "Items": ["To-Do 1"], "Quiz": [ {{"Q": "Txt", "A": "Txt"}} ] }}
-    }}
-    TEXT: {text[:25000]}
-    """
-
-    max_retries = 3
-    retry_delay = 20 # seconds
-
-    for attempt in range(max_retries):
-        try:
-            response = model.generate_content(prompt)
-            return response.text
-        except Exception as e:
-            error_msg = str(e)
-            if "429" in error_msg:
-                if attempt < max_retries - 1:
-                    # Show countdown in UI
-                    for s in range(retry_delay, 0, -1):
-                        status_container.warning(f"⚠️ API Rate Limit Hit. Cooling down... Retrying in {s}s")
-                        time.sleep(1)
-                    status_container.info("♻️ Retrying now...")
-                    continue # Try again
-                else:
-                    return f"API_ERROR: Quota Exceeded (429). Please try fewer files or wait a minute."
-            else:
-                return f"API_ERROR: {error_msg}"
-    
-    return "API_ERROR: Unknown failure"
-
-def ask_chat(api_key, history, context, question, sys_prompt):
+def ask_chat(api_key, history, context, question):
     genai.configure(api_key=api_key)
     model = genai.GenerativeModel('gemini-1.5-flash')
-    msgs = [{"role": "user", "parts": [f"System: {sys_prompt}. Context: {context[:20000]}"]}]
+    msgs = [{"role": "user", "parts": [f"Context: {context[:20000]}"]}]
     for m in history:
         msgs.append({"role": "user" if m["role"] == "user" else "model", "parts": [m["content"]]})
     msgs.append({"role": "user", "parts": [question]})
@@ -205,151 +274,110 @@ def ask_chat(api_key, history, context, question, sys_prompt):
     except: return "Connection error."
 
 # -----------------------------------------------------------------------------
-# 4. MAIN UI
+# 4. MAIN UI STRUCTURE
 # -----------------------------------------------------------------------------
 def main():
     
-    c1, c2 = st.columns([4, 1])
-    with c1: 
-        st.markdown("<h1 style='color: #1a202c;'>🧠 Universal AI Brain</h1>", unsafe_allow_html=True)
-    with c2: 
-        lang = st.selectbox("", ["English", "Deutsch", "Français", "العربية"], label_visibility="collapsed")
-    
-    config = get_prompts(lang)
-    is_rtl = lang == "العربية"
-    
-    with st.expander("🔐 AI Settings (API Key)", expanded=False):
-        api_key = st.text_input("Enter Google API Key", type="password")
+    # --- HEADER ---
+    st.markdown("<h1>Hey! I'm your AI<br>Brain Assistant</h1>", unsafe_allow_html=True)
+    st.markdown("<p>Based on your uploaded documents, I've analyzed your possible needs. Click to generate solutions.</p>", unsafe_allow_html=True)
 
-    st.markdown(f"### {config['ui_desc']}")
-    uploaded_files = st.file_uploader("", type=["pdf"], accept_multiple_files=True)
-    
-    if uploaded_files and api_key:
-        if st.button(config["btn_label"], use_container_width=True):
+    # --- API KEY (Hidden in expander for clean look) ---
+    with st.expander("🔐 Setup API Key (Click Here)", expanded=False):
+        api_key = st.text_input("Google API Key", type="password")
+
+    # --- VISUAL CENTERPIECE (Robot + Bubbles) ---
+    # Using HTML/CSS to replicate the image layout exactly
+    st.markdown("""
+        <div class="robot-container">
+            <!-- Left Bubble -->
+            <div class="floating-bubble bubble-left">
+                <span style="font-size: 20px;">📄</span>
+                <span>Docs</span>
+            </div>
             
-            status_container = st.empty()
-            progress_bar = st.progress(0)
-            processed_count = 0
-            errors = []
+            <!-- Center Robot -->
+            <div class="glow-circle"></div>
+            <img src="https://img.icons8.com/3d-fluency/375/robot-2.png" class="robot-img">
             
-            with st.spinner("Initializing Neural Core..."):
-                total = len(uploaded_files)
-                for idx, up_file in enumerate(uploaded_files):
-                    
-                    f_hash = get_file_hash(up_file.getvalue())
-                    
-                    if f_hash not in st.session_state.library:
-                        status_container.markdown(f"**📄 Reading file {idx+1}/{total}: {up_file.name}...**")
-                        txt = extract_text(up_file)
-                        
-                        if txt:
-                            status_container.markdown(f"**🧠 Analyzing: {up_file.name}...**")
-                            
-                            # Use the new Retry-Enabled Analysis
-                            raw_response = analyze_content_with_retry(api_key, txt, config["sys_prompt"], status_container)
-                            
-                            if raw_response and "API_ERROR" not in raw_response:
-                                data = robust_json_extractor(raw_response)
-                                if data:
-                                    st.session_state.library[f_hash] = {
-                                        "name": up_file.name, "data": data, 
-                                        "text": txt, "chat_history": []
-                                    }
-                                    processed_count += 1
-                                else:
-                                    errors.append(f"Parse Error in {up_file.name}")
-                            else:
-                                errors.append(raw_response)
-                        else:
-                            errors.append(f"Unreadable PDF: {up_file.name}")
-                    else:
-                        processed_count += 1
-                    
-                    progress_bar.progress((idx + 1) / total)
-                    time.sleep(1) # Small safety buffer between files
-                
-                if processed_count > 0:
-                    status_container.success(f"✅ Success! {processed_count} files ready.")
-                    time.sleep(1)
-                    st.rerun()
-                else:
-                    status_container.error("❌ Process Failed.")
-                    for e in errors: st.error(e)
+            <!-- Speech Bubble CTA -->
+            <div class="speech-bubble">
+                Click me! Upload PDF
+            </div>
+            
+            <!-- Right Bubble -->
+            <div class="floating-bubble bubble-right">
+                <span style="font-size: 20px;">🎓</span>
+                <span>Study</span>
+            </div>
+        </div>
+    """, unsafe_allow_html=True)
 
-    st.markdown("---")
+    # --- UPLOAD SECTION (Visual integration) ---
+    # We place the uploader here. In a real app, clicking the speech bubble would trigger this.
+    # Here we put it below to mimic the flow.
+    uploaded_files = st.file_uploader("Upload your files here", type=["pdf"], accept_multiple_files=True, label_visibility="collapsed")
 
-    if not st.session_state.library:
-        st.info("👋 Ready. Upload a PDF to begin.")
-    
-    else:
+    # --- PROCESS LOGIC ---
+    if uploaded_files and api_key and st.button("✨ Analyze Files", type="primary", use_container_width=True):
+        with st.status("🧠 Processing...", expanded=True) as status:
+            processed = 0
+            for up_file in uploaded_files:
+                f_hash = get_file_hash(up_file.getvalue())
+                if f_hash not in st.session_state.library:
+                    st.write(f"Reading {up_file.name}...")
+                    txt = extract_text(up_file)
+                    if txt:
+                        st.write(f"Analyzing content...")
+                        raw = analyze_content(api_key, txt)
+                        data = robust_json_extractor(raw)
+                        if data:
+                            st.session_state.library[f_hash] = {
+                                "name": up_file.name, "data": data, "text": txt, "chat_history": []
+                            }
+                            processed += 1
+            if processed > 0:
+                status.update(label="Done!", state="complete")
+                st.rerun()
+
+    # --- PREMIUM BUTTONS ---
+    st.markdown("""
+        <div class="premium-card">
+            <span>✨ Get a free trial of the premium version</span>
+        </div>
+        <div style="text-align: left;">
+            <span class="pro-button">✨ Upgrade to Pro</span>
+        </div>
+    """, unsafe_allow_html=True)
+
+    # --- RESULTS AREA (If data exists) ---
+    if st.session_state.library:
         file_map = {v['name']: k for k, v in st.session_state.library.items()}
-        selected_name = st.selectbox("📂 Select Document", list(file_map.keys()))
+        # Use a simpler selector for this UI
+        selected_name = st.selectbox("Select File to Chat", list(file_map.keys()))
         
         if selected_name:
             fid = file_map[selected_name]
             f_obj = st.session_state.library[fid]
-            data = f_obj["data"]
-            cat = data.get("Category", "General")
             
-            st.markdown(f"""
-            <div class="glass-card">
-                <span style="background:#4b6cb7; color:white; padding:5px 15px; border-radius:20px; font-size:0.85em; font-weight:bold;">{cat.upper()}</span>
-                <h2 style="margin-top:15px; margin-bottom:10px;">{data['Overview'].get('Title', f_obj['name'])}</h2>
-                <p style="font-size:1.1em; opacity:0.8; line-height:1.6;">{data['Overview'].get('Summary', '')}</p>
-            </div>
-            """, unsafe_allow_html=True)
-            
-            t1, t2, t3, t4 = st.tabs(config["tabs"])
-            
-            with t1:
-                st.markdown(f"<div class='glass-card' {'class=rtl' if is_rtl else ''}>", unsafe_allow_html=True)
-                st.subheader("🏷️ Tags")
-                tags = data['Overview'].get("Tags", [])
-                st.markdown(" ".join([f"`{t}`" for t in tags]) if tags else "No tags")
-                st.markdown("</div>", unsafe_allow_html=True)
+            # Show Chat History just above the input
+            for m in f_obj["chat_history"]:
+                with st.chat_message(m["role"]): st.write(m["content"])
 
-            with t2:
-                st.markdown(f"<div class='glass-card' {'class=rtl' if is_rtl else ''}>", unsafe_allow_html=True)
-                st.subheader("💡 Key Insights")
-                for p in data.get("Insights", []): st.markdown(f"**•** {p}")
-                st.markdown("</div>", unsafe_allow_html=True)
-
-            with t3:
-                act = data.get("Actionable", {})
-                if act.get("Items"):
-                    st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
-                    st.subheader("📝 Action Items")
-                    for item in act["Items"]: st.checkbox(item, key=f"{fid}_{item}")
-                    st.markdown("</div>", unsafe_allow_html=True)
-                
-                if act.get("Quiz"):
-                    st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
-                    st.subheader("🧠 Quiz")
-                    for i, q in enumerate(act["Quiz"]):
-                        with st.expander(f"Q{i+1}: {q.get('Q','?')}"): st.info(f"Answer: {q.get('A','')}")
-                    st.markdown("</div>", unsafe_allow_html=True)
-
-            with t4:
-                st.markdown(f"*{config['chat_welcome']}*")
-                for m in f_obj["chat_history"]:
-                    with st.chat_message(m["role"]): st.write(m["content"])
-                
-                if prompt := st.chat_input("Type question..."):
+            # --- FLOATING CHAT INPUT ---
+            if prompt := st.chat_input("Please enter your requirements..."):
+                if api_key:
                     f_obj["chat_history"].append({"role": "user", "content": prompt})
                     with st.chat_message("user"): st.write(prompt)
                     
-                    with st.spinner("AI Thinking..."):
-                        reply = ask_chat(api_key, f_obj["chat_history"], f_obj["text"], prompt, config["sys_prompt"])
+                    with st.spinner("..."):
+                        reply = ask_chat(api_key, f_obj["chat_history"], f_obj["text"], prompt)
                     
                     f_obj["chat_history"].append({"role": "assistant", "content": reply})
                     with st.chat_message("assistant"): st.write(reply)
-                    time.sleep(0.1)
                     st.rerun()
-
-            st.divider()
-            if st.button("🗑️ Clear Library", type="primary"):
-                st.session_state.library = {}
-                st.rerun()
+                else:
+                    st.error("Please enter API Key above.")
 
 if __name__ == "__main__":
     main()
