@@ -5,216 +5,172 @@ import json
 import re
 import hashlib
 import time
+import random
 
 # -----------------------------------------------------------------------------
-# 1. PAGE CONFIGURATION
+# 1. PAGE CONFIGURATION (Crucial: Must be "centered" to match the screenshot)
 # -----------------------------------------------------------------------------
 st.set_page_config(
-    page_title="AI Assistant",
+    page_title="Holo AI v12",
     page_icon="🤖",
-    layout="centered", # Centered layout matches mobile app view better
+    layout="centered",
     initial_sidebar_state="collapsed"
 )
 
 # -----------------------------------------------------------------------------
-# 2. HOLO-BLUE UI (CSS)
+# 2. HOLO-BLUE UI CSS (Forced Override)
 # -----------------------------------------------------------------------------
 st.markdown("""
     <style>
-    /* 1. THE BACKGROUND GRADIENT (Deep Blue to White) */
+    /* 1. BACKGROUND: Exact gradient from the screenshot */
     .stApp {
-        background: linear-gradient(180deg, #4c6ef5 0%, #859df9 40%, #dbe4ff 75%, #ffffff 100%);
+        background: linear-gradient(180deg, #4c6ef5 0%, #748ffc 30%, #bac8ff 60%, #ffffff 100%);
         background-attachment: fixed;
     }
 
-    /* 2. HIDE DEFAULT STREAMLIT ELEMENTS */
-    header {visibility: hidden;}
+    /* 2. HIDE DEFAULT ELEMENTS (Clean look) */
+    #MainMenu {visibility: hidden;}
     footer {visibility: hidden;}
+    header {visibility: hidden;}
     [data-testid="stToolbar"] {visibility: hidden;}
     
     /* 3. TYPOGRAPHY */
     h1 {
         color: white !important;
-        font-family: 'Helvetica Neue', sans-serif;
+        font-family: sans-serif;
         font-weight: 700;
-        font-size: 2.5rem !important;
-        text-shadow: 0 2px 10px rgba(0,0,0,0.1);
-        margin-bottom: 10px !important;
+        text-align: center;
+        text-shadow: 0 4px 10px rgba(0,0,0,0.2);
     }
     p {
-        color: rgba(255, 255, 255, 0.9) !important;
-        font-size: 1.1rem !important;
-        line-height: 1.5;
+        color: rgba(255,255,255,0.95) !important;
+        text-align: center;
+        font-size: 1.1rem;
     }
 
-    /* 4. THE 3D ROBOT AVATAR & GLOW */
-    .robot-container {
+    /* 4. THE 3D AVATAR CONTAINER */
+    .avatar-container {
+        position: relative;
+        height: 350px;
         display: flex;
         justify-content: center;
         align-items: center;
-        position: relative;
-        height: 300px;
-        margin-top: 20px;
-    }
-    
-    .glow-circle {
-        position: absolute;
-        width: 180px;
-        height: 180px;
-        background: radial-gradient(circle, rgba(255,255,255,0.4) 0%, rgba(255,255,255,0) 70%);
-        border-radius: 50%;
-        z-index: 1;
-        animation: pulse 3s infinite;
-    }
-    
-    @keyframes pulse {
-        0% { transform: scale(0.95); opacity: 0.7; }
-        50% { transform: scale(1.1); opacity: 1; }
-        100% { transform: scale(0.95); opacity: 0.7; }
+        margin-bottom: 20px;
     }
 
+    /* The Robot Image */
     .robot-img {
-        width: 120px;
-        height: 120px;
-        z-index: 2;
+        width: 140px;
+        height: 140px;
         border-radius: 50%;
         background: white;
         padding: 10px;
-        box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+        box-shadow: 0 15px 40px rgba(0,0,0,0.2);
+        z-index: 10;
+        animation: float 6s ease-in-out infinite;
     }
 
-    /* 5. FLOATING BUBBLES */
-    .floating-bubble {
+    /* The Glow behind robot */
+    .glow {
         position: absolute;
-        background: rgba(255, 255, 255, 0.25);
-        backdrop-filter: blur(10px);
-        -webkit-backdrop-filter: blur(10px);
+        width: 250px;
+        height: 250px;
+        background: radial-gradient(circle, rgba(255,255,255,0.3) 0%, rgba(255,255,255,0) 70%);
+        border-radius: 50%;
+        animation: pulse 4s infinite;
+    }
+
+    /* Floating Bubbles (Left/Right) */
+    .bubble {
+        position: absolute;
+        background: rgba(255,255,255,0.2);
+        backdrop-filter: blur(8px);
+        border: 1px solid rgba(255,255,255,0.4);
         border-radius: 50%;
         display: flex;
         flex-direction: column;
         justify-content: center;
         align-items: center;
         color: white;
-        font-size: 0.8rem;
-        box-shadow: 0 4px 15px rgba(0,0,0,0.1);
-        border: 1px solid rgba(255,255,255,0.3);
-        animation: float 4s ease-in-out infinite;
+        font-weight: bold;
+        box-shadow: 0 5px 15px rgba(0,0,0,0.1);
     }
+    .b-left { width: 100px; height: 100px; top: 50px; left: 10%; animation: float 5s infinite 1s; }
+    .b-right { width: 110px; height: 110px; bottom: 50px; right: 10%; animation: float 7s infinite 2s; }
 
-    .bubble-left {
-        width: 90px;
-        height: 90px;
-        top: 40px;
-        left: 20px;
-        animation-delay: 0s;
-    }
-    
-    .bubble-right {
-        width: 100px;
-        height: 100px;
-        bottom: 40px;
-        right: 20px;
-        animation-delay: 2s;
-    }
-
-    @keyframes float {
-        0% { transform: translateY(0px); }
-        50% { transform: translateY(-10px); }
-        100% { transform: translateY(0px); }
-    }
-
-    /* 6. SPEECH BUBBLE (CTA) */
-    .speech-bubble {
+    /* The "Click Me" Speech Bubble */
+    .cta-bubble {
         position: absolute;
-        top: 20px;
-        right: 50px;
+        top: 30px;
+        right: 25%;
         background: white;
         color: #4c6ef5;
         padding: 10px 20px;
         border-radius: 20px;
         font-weight: bold;
-        font-size: 0.9rem;
-        box-shadow: 0 4px 10px rgba(0,0,0,0.1);
-        z-index: 5;
-        cursor: pointer;
+        box-shadow: 0 5px 20px rgba(0,0,0,0.15);
+        z-index: 20;
+        animation: pop 0.5s ease-out;
     }
-    .speech-bubble:after {
+    .cta-bubble::after {
         content: '';
         position: absolute;
-        bottom: 0;
-        left: 50%;
-        width: 0;
-        height: 0;
-        border: 10px solid transparent;
-        border-top-color: white;
-        border-bottom: 0;
-        margin-left: -10px;
-        margin-bottom: -10px;
+        bottom: -10px;
+        left: 20px;
+        border-width: 10px 10px 0;
+        border-style: solid;
+        border-color: white transparent;
     }
 
-    /* 7. PREMIUM BUTTONS */
-    .premium-card {
-        background: linear-gradient(90deg, #2b3a6e 0%, #4c6ef5 100%);
-        border-radius: 30px;
-        padding: 15px;
-        color: white;
-        text-align: center;
-        margin: 20px 0;
-        box-shadow: 0 10px 25px rgba(76, 110, 245, 0.4);
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        gap: 10px;
-        font-weight: bold;
-    }
-    
-    .pro-button {
-        background: rgba(255, 255, 255, 0.2);
-        border-radius: 30px;
-        padding: 10px 20px;
-        color: #333;
-        text-align: center;
-        font-weight: bold;
-        backdrop-filter: blur(5px);
-        margin-bottom: 20px;
-        display: inline-block;
-        border: 1px solid rgba(255,255,255,0.4);
-    }
+    /* Animations */
+    @keyframes float { 0%{transform: translateY(0px);} 50%{transform: translateY(-15px);} 100%{transform: translateY(0px);} }
+    @keyframes pulse { 0%{transform: scale(0.9); opacity:0.6;} 50%{transform: scale(1.1); opacity:1;} 100%{transform: scale(0.9); opacity:0.6;} }
 
-    /* 8. INPUT FIELD (Floating Pill) */
+    /* 5. INPUT FIELD (Floating at bottom) */
     .stChatInput {
         position: fixed;
-        bottom: 30px;
+        bottom: 20px;
         left: 50%;
         transform: translateX(-50%);
         width: 90%;
         max-width: 600px;
-        z-index: 100;
+        z-index: 999;
     }
     .stChatInputContainer {
-        background-color: white;
-        border-radius: 30px !important;
-        box-shadow: 0 5px 20px rgba(0,0,0,0.1);
-        padding: 5px;
-        border: none;
-    }
-    .stChatInputContainer textarea {
-        color: #333;
+        background: white;
+        border-radius: 40px !important;
+        box-shadow: 0 10px 30px rgba(0,0,0,0.15);
+        padding: 5px 10px;
     }
 
-    /* 9. FILE UPLOADER STYLING (Hidden inside bubble concept) */
+    /* 6. UPLOAD BOX (Styled to blend in) */
     [data-testid="stFileUploader"] {
-        background: white;
-        border-radius: 20px;
-        padding: 20px;
+        background: rgba(255,255,255,0.9);
+        border-radius: 15px;
+        padding: 15px;
+        margin-top: -20px;
+        margin-bottom: 20px;
+        box-shadow: 0 4px 10px rgba(0,0,0,0.05);
+    }
+    
+    /* 7. PREMIUM BUTTONS */
+    .premium-btn {
+        background: rgba(255,255,255,0.25);
+        border: 1px solid rgba(255,255,255,0.5);
+        border-radius: 30px;
+        padding: 12px;
+        color: white;
         text-align: center;
-        box-shadow: 0 10px 30px rgba(0,0,0,0.1);
+        font-weight: 600;
+        margin: 10px 0;
+        cursor: pointer;
+        backdrop-filter: blur(5px);
     }
     </style>
 """, unsafe_allow_html=True)
 
 # -----------------------------------------------------------------------------
-# 3. LOGIC & STATE
+# 3. ROBUST API LOGIC (With Exponential Backoff)
 # -----------------------------------------------------------------------------
 if 'library' not in st.session_state: st.session_state.library = {} 
 
@@ -240,33 +196,51 @@ def robust_json_extractor(text):
         return json.loads(text[start:end])
     except: return None
 
-def analyze_content(api_key, text):
+def analyze_with_backoff(api_key, text):
+    """
+    Tries to call Google API. If rate limited (429), waits longer and retries.
+    """
     genai.configure(api_key=api_key)
-    try:
-        models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
-        model_name = 'models/gemini-1.5-flash' if 'models/gemini-1.5-flash' in models else models[0]
-        model = genai.GenerativeModel(model_name)
-        
-        prompt = f"""
-        You are a Universal AI Assistant.
-        TASK: Identify category (Study, Work, Novel, Travel). Extract structured data.
-        OUTPUT JSON ONLY:
-        {{
-            "Category": "Short Name",
-            "Overview": {{ "Title": "Txt", "Summary": "Txt" }},
-            "Insights": ["Point 1", "Point 2"],
-            "Actionable": {{ "Items": ["To-Do 1"] }}
-        }}
-        TEXT: {text[:25000]}
-        """
-        response = model.generate_content(prompt)
-        return response.text
-    except Exception as e: return f"API_ERROR: {str(e)}"
+    # Prefer Flash model for speed/allowance
+    models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
+    model_name = 'models/gemini-1.5-flash' if 'models/gemini-1.5-flash' in models else models[0]
+    model = genai.GenerativeModel(model_name)
+    
+    prompt = f"""
+    You are a helpful AI Assistant.
+    TASK: Analyze context (Study, Work, Travel).
+    OUTPUT: Valid JSON ONLY.
+    {{
+        "Category": "Short Name",
+        "Overview": {{ "Title": "Txt", "Summary": "Txt" }},
+        "Insights": ["Point 1", "Point 2"]
+    }}
+    TEXT: {text[:20000]}
+    """
+    
+    # RETRY LOGIC
+    max_retries = 3
+    base_delay = 10 # Start with 10 seconds wait
+    
+    for attempt in range(max_retries):
+        try:
+            response = model.generate_content(prompt)
+            return response.text
+        except Exception as e:
+            if "429" in str(e): # Rate Limit Error
+                wait_time = base_delay * (2 ** attempt) + random.randint(1, 5) # 10s -> 20s -> 40s
+                with st.spinner(f"⚠️ High Traffic. Waiting {wait_time}s to ensure success..."):
+                    time.sleep(wait_time)
+                continue # Retry loop
+            else:
+                return f"API_ERROR: {str(e)}"
+    
+    return "API_ERROR: Failed after multiple retries."
 
 def ask_chat(api_key, history, context, question):
     genai.configure(api_key=api_key)
     model = genai.GenerativeModel('gemini-1.5-flash')
-    msgs = [{"role": "user", "parts": [f"Context: {context[:20000]}"]}]
+    msgs = [{"role": "user", "parts": [f"Context: {context[:15000]}"]}]
     for m in history:
         msgs.append({"role": "user" if m["role"] == "user" else "model", "parts": [m["content"]]})
     msgs.append({"role": "user", "parts": [question]})
@@ -274,98 +248,89 @@ def ask_chat(api_key, history, context, question):
     except: return "Connection error."
 
 # -----------------------------------------------------------------------------
-# 4. MAIN UI STRUCTURE
+# 4. UI LAYOUT
 # -----------------------------------------------------------------------------
 def main():
     
-    # --- HEADER ---
+    # HEADER
     st.markdown("<h1>Hey! I'm your AI<br>Brain Assistant</h1>", unsafe_allow_html=True)
-    st.markdown("<p>Based on your uploaded documents, I've analyzed your possible needs. Click to generate solutions.</p>", unsafe_allow_html=True)
+    st.markdown("<p>I've analyzed your space and device information. Click to generate solutions.</p>", unsafe_allow_html=True)
 
-    # --- API KEY (Hidden in expander for clean look) ---
-    with st.expander("🔐 Setup API Key (Click Here)", expanded=False):
-        api_key = st.text_input("Google API Key", type="password")
+    # API KEY (Collapsible)
+    with st.expander("🔐 Setup Key", expanded=False):
+        api_key = st.text_input("API Key", type="password", label_visibility="collapsed")
 
-    # --- VISUAL CENTERPIECE (Robot + Bubbles) ---
-    # Using HTML/CSS to replicate the image layout exactly
+    # THE VISUAL SCENE
     st.markdown("""
-        <div class="robot-container">
-            <!-- Left Bubble -->
-            <div class="floating-bubble bubble-left">
-                <span style="font-size: 20px;">📄</span>
+        <div class="avatar-container">
+            <div class="bubble b-left">
+                <span style="font-size:24px;">📄</span>
                 <span>Docs</span>
             </div>
             
-            <!-- Center Robot -->
-            <div class="glow-circle"></div>
+            <div class="glow"></div>
             <img src="https://img.icons8.com/3d-fluency/375/robot-2.png" class="robot-img">
             
-            <!-- Speech Bubble CTA -->
-            <div class="speech-bubble">
-                Click me! Upload PDF
-            </div>
+            <div class="cta-bubble">Click below!</div>
             
-            <!-- Right Bubble -->
-            <div class="floating-bubble bubble-right">
-                <span style="font-size: 20px;">🎓</span>
-                <span>Study</span>
+            <div class="bubble b-right">
+                <span style="font-size:24px;">💡</span>
+                <span>Ideas</span>
             </div>
         </div>
     """, unsafe_allow_html=True)
 
-    # --- UPLOAD SECTION (Visual integration) ---
-    # We place the uploader here. In a real app, clicking the speech bubble would trigger this.
-    # Here we put it below to mimic the flow.
-    uploaded_files = st.file_uploader("Upload your files here", type=["pdf"], accept_multiple_files=True, label_visibility="collapsed")
+    # FILE UPLOADER (Acts as the interaction point)
+    uploaded_files = st.file_uploader("Upload Here", type=["pdf"], accept_multiple_files=True, label_visibility="collapsed")
 
-    # --- PROCESS LOGIC ---
-    if uploaded_files and api_key and st.button("✨ Analyze Files", type="primary", use_container_width=True):
-        with st.status("🧠 Processing...", expanded=True) as status:
-            processed = 0
-            for up_file in uploaded_files:
-                f_hash = get_file_hash(up_file.getvalue())
-                if f_hash not in st.session_state.library:
-                    st.write(f"Reading {up_file.name}...")
-                    txt = extract_text(up_file)
-                    if txt:
-                        st.write(f"Analyzing content...")
-                        raw = analyze_content(api_key, txt)
+    # ANALYZE BUTTON
+    if uploaded_files and api_key and st.button("✨ Analyze Now", use_container_width=True, type="primary"):
+        processed = 0
+        for up_file in uploaded_files:
+            f_hash = get_file_hash(up_file.getvalue())
+            if f_hash not in st.session_state.library:
+                st.info(f"Reading {up_file.name}...")
+                txt = extract_text(up_file)
+                if txt:
+                    # Uses the new Backoff function
+                    raw = analyze_with_backoff(api_key, txt)
+                    if "API_ERROR" not in raw:
                         data = robust_json_extractor(raw)
                         if data:
                             st.session_state.library[f_hash] = {
                                 "name": up_file.name, "data": data, "text": txt, "chat_history": []
                             }
                             processed += 1
-            if processed > 0:
-                status.update(label="Done!", state="complete")
-                st.rerun()
+                    else:
+                        st.error(raw)
+        
+        if processed > 0:
+            st.success("Done! Chat below.")
+            time.sleep(1)
+            st.rerun()
 
-    # --- PREMIUM BUTTONS ---
+    # PREMIUM MOCKUPS
     st.markdown("""
-        <div class="premium-card">
-            <span>✨ Get a free trial of the premium version</span>
-        </div>
-        <div style="text-align: left;">
-            <span class="pro-button">✨ Upgrade to Pro</span>
-        </div>
+        <div class="premium-btn">✨ Get a free trial of Premium</div>
+        <div class="premium-btn" style="background:rgba(0,0,0,0.1);">✨ Upgrade to Pro</div>
     """, unsafe_allow_html=True)
 
-    # --- RESULTS AREA (If data exists) ---
+    # CHAT INTERFACE
     if st.session_state.library:
+        # File selector styled simply
         file_map = {v['name']: k for k, v in st.session_state.library.items()}
-        # Use a simpler selector for this UI
-        selected_name = st.selectbox("Select File to Chat", list(file_map.keys()))
+        selected = st.selectbox("Select File", list(file_map.keys()), label_visibility="collapsed")
         
-        if selected_name:
-            fid = file_map[selected_name]
+        if selected:
+            fid = file_map[selected]
             f_obj = st.session_state.library[fid]
             
-            # Show Chat History just above the input
+            # Show history
             for m in f_obj["chat_history"]:
                 with st.chat_message(m["role"]): st.write(m["content"])
-
-            # --- FLOATING CHAT INPUT ---
-            if prompt := st.chat_input("Please enter your requirements..."):
+            
+            # Floating Input
+            if prompt := st.chat_input("Enter your requirements..."):
                 if api_key:
                     f_obj["chat_history"].append({"role": "user", "content": prompt})
                     with st.chat_message("user"): st.write(prompt)
@@ -376,8 +341,6 @@ def main():
                     f_obj["chat_history"].append({"role": "assistant", "content": reply})
                     with st.chat_message("assistant"): st.write(reply)
                     st.rerun()
-                else:
-                    st.error("Please enter API Key above.")
 
 if __name__ == "__main__":
     main()
