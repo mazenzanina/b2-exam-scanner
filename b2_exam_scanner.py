@@ -1,494 +1,241 @@
-import 'dart:async';
-import 'dart:math';
-import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
+import streamlit as st
+import time
+import pandas as pd
+import plotly.graph_objects as go
+import numpy as np
+from datetime import datetime
 
-// ---------------------------------------------------------------------------
-// 1. DATA MODELS
-// ---------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
+# 1. CONFIGURATION & STYLING
+# -----------------------------------------------------------------------------
+st.set_page_config(
+    page_title="Official IQ Test",
+    page_icon="🧠",
+    layout="centered",
+    initial_sidebar_state="collapsed"
+)
 
-class Question {
-  final int id;
-  // In a real app, this would be an asset path 'assets/q1.png'
-  final IconData visualPattern; 
-  final List<IconData> options;
-  final int correctOptionIndex;
+# Custom CSS to hide Streamlit branding and make it look like a standalone app
+st.markdown("""
+<style>
+    /* Hide Streamlit default menu and footer */
+    #MainMenu {visibility: hidden;}
+    footer {visibility: hidden;}
+    header {visibility: hidden;}
 
-  Question({
-    required this.id,
-    required this.visualPattern,
-    required this.options,
-    required this.correctOptionIndex,
-  });
-}
+    /* Modern Font & Colors */
+    body {
+        font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
+        background-color: #f5f7fa;
+    }
 
-// ---------------------------------------------------------------------------
-// 2. MOCK DATA (Replace with real Image Assets)
-// ---------------------------------------------------------------------------
+    /* Card Styling */
+    .stApp {
+        background-color: #f5f7fa;
+    }
+    
+    div[data-testid="stVerticalBlock"] > div {
+        background-color: white;
+        padding: 20px;
+        border-radius: 15px;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.05);
+    }
+    
+    /* Button Styling */
+    .stButton > button {
+        width: 100%;
+        border-radius: 10px;
+        height: 3em;
+        background-color: #007AFF;
+        color: white;
+        border: none;
+        font-weight: bold;
+        transition: all 0.3s;
+    }
+    .stButton > button:hover {
+        background-color: #0056b3;
+        box-shadow: 0 4px 8px rgba(0,122,255,0.3);
+    }
 
-final List<Question> demoQuestions = [
-  Question(
-    id: 1,
-    visualPattern: Icons.grid_3x3, // Represents the Matrix puzzle
-    options: [Icons.circle, Icons.square, Icons.star, Icons.check_box_outline_blank],
-    correctOptionIndex: 1,
-  ),
-  Question(
-    id: 2,
-    visualPattern: Icons.apps,
-    options: [Icons.filter_1, Icons.filter_2, Icons.filter_3, Icons.filter_4],
-    correctOptionIndex: 3,
-  ),
-  Question(
-    id: 3,
-    visualPattern: Icons.pie_chart,
-    options: [Icons.timelapse, Icons.data_usage, Icons.donut_large, Icons.circle],
-    correctOptionIndex: 2,
-  ),
-  // Add 20-30 more questions here for a real test
-];
+    /* Option Buttons (Secondary) */
+    .option-btn > button {
+        background-color: #f0f2f6;
+        color: #333;
+    }
+    
+    h1, h2, h3 {
+        color: #2c3e50;
+        text-align: center;
+    }
+</style>
+""", unsafe_allow_html=True)
 
-// ---------------------------------------------------------------------------
-// 3. MAIN APP ENTRY
-// ---------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
+# 2. DATA MODELS & MOCK QUESTIONS
+# -----------------------------------------------------------------------------
 
-void main() {
-  SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(
-    statusBarColor: Colors.transparent,
-    statusBarIconBrightness: Brightness.dark,
-  ));
-  runApp(const IQTestApp());
-}
+# We generate mock "Matrix" questions. 
+# In a real app, these would be paths to images (e.g., 'assets/q1.png').
+QUESTIONS = [
+    {
+        "id": 1,
+        "text": "Which shape completes the pattern?",
+        "pattern_type": "progression", # Mock type
+        "options": ["⚪ Circle", "⬛ Square", "🔺 Triangle", "⭐ Star"],
+        "answer": 1 # Index of correct answer
+    },
+    {
+        "id": 2,
+        "text": "Logic: 1 -> 2 -> 4 -> ?",
+        "pattern_type": "math",
+        "options": ["6", "8", "7", "5"],
+        "answer": 1
+    },
+    {
+        "id": 3,
+        "text": "Select the missing piece.",
+        "pattern_type": "visual",
+        "options": ["Option A", "Option B", "Option C", "Option D"],
+        "answer": 2
+    },
+    {
+        "id": 4,
+        "text": "Which object does not belong?",
+        "pattern_type": "visual",
+        "options": ["Apple", "Banana", "Carrot", "Grape"],
+        "answer": 2 # Carrot is a vegetable
+    },
+    {
+        "id": 5,
+        "text": "Complete the sequence: A, C, E, G, ...",
+        "pattern_type": "logic",
+        "options": ["H", "I", "J", "K"],
+        "answer": 1
+    }
+]
 
-class IQTestApp extends StatelessWidget {
-  const IQTestApp({super.key});
+# -----------------------------------------------------------------------------
+# 3. SESSION STATE MANAGEMENT
+# -----------------------------------------------------------------------------
+if 'page' not in st.session_state:
+    st.session_state.page = 'home'
+if 'current_q' not in st.session_state:
+    st.session_state.current_q = 0
+if 'score' not in st.session_state:
+    st.session_state.score = 0
+if 'answers' not in st.session_state:
+    st.session_state.answers = {}
+if 'start_time' not in st.session_state:
+    st.session_state.start_time = None
 
-  @override
-  Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'Official IQ Test',
-      debugShowCheckedModeBanner: false,
-      theme: ThemeData(
-        useMaterial3: true,
-        colorScheme: ColorScheme.fromSeed(
-          seedColor: const Color(0xFF2A2D34), // Dark modern grey
-          primary: const Color(0xFF007AFF),   // Trustworthy Blue
-          secondary: const Color(0xFF34C759), // Success Green
-        ),
-        fontFamily: 'Roboto', // Use a clean font like Roboto or Montserrat
-        scaffoldBackgroundColor: const Color(0xFFF5F7FA),
-      ),
-      home: const WelcomeScreen(),
-    );
-  }
-}
+# -----------------------------------------------------------------------------
+# 4. HELPER FUNCTIONS
+# -----------------------------------------------------------------------------
 
-// ---------------------------------------------------------------------------
-// 4. WELCOME SCREEN
-// ---------------------------------------------------------------------------
+def start_quiz():
+    st.session_state.page = 'quiz'
+    st.session_state.current_q = 0
+    st.session_state.score = 0
+    st.session_state.start_time = time.time()
+    st.rerun()
 
-class WelcomeScreen extends StatelessWidget {
-  const WelcomeScreen({super.key});
+def submit_answer(option_index):
+    # Record answer
+    q_index = st.session_state.current_q
+    correct_index = QUESTIONS[q_index]['answer']
+    
+    st.session_state.answers[q_index] = option_index
+    
+    if option_index == correct_index:
+        st.session_state.score += 1
+    
+    # Move to next or finish
+    if st.session_state.current_q < len(QUESTIONS) - 1:
+        st.session_state.current_q += 1
+        st.rerun()
+    else:
+        st.session_state.page = 'result'
+        st.rerun()
 
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      body: SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 24.0),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              const Spacer(),
-              const Icon(Icons.psychology, size: 100, color: Color(0xFF007AFF)),
-              const SizedBox(height: 24),
-              const Text(
-                "Standardized IQ Test",
-                style: TextStyle(fontSize: 28, fontWeight: FontWeight.bold, color: Colors.black87),
-                textAlign: TextAlign.center,
-              ),
-              const SizedBox(height: 12),
-              const Text(
-                "Based on Raven's Progressive Matrices. \nDiscover your cognitive potential.",
-                style: TextStyle(fontSize: 16, color: Colors.black54),
-                textAlign: TextAlign.center,
-              ),
-              const Spacer(),
-              _buildFeatureRow(Icons.timer, "20 Minutes"),
-              _buildFeatureRow(Icons.question_answer, "30 Questions"),
-              _buildFeatureRow(Icons.poll, "Instant Results"),
-              const Spacer(),
-              SizedBox(
-                width: double.infinity,
-                height: 56,
-                child: ElevatedButton(
-                  onPressed: () => Navigator.push(
-                    context, 
-                    MaterialPageRoute(builder: (context) => const QuizScreen())
-                  ),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Theme.of(context).primaryColor,
-                    foregroundColor: Colors.white,
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-                    elevation: 4,
-                  ),
-                  child: const Text("START TEST", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-                ),
-              ),
-              const SizedBox(height: 24),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
+def calculate_iq(raw_score, total_questions):
+    # Mock Formula: Baseline 70 + (Percentage * 70) 
+    # Creates a range of ~70 to 140
+    percentage = raw_score / total_questions
+    iq = 70 + (percentage * 75)
+    return int(iq)
 
-  Widget _buildFeatureRow(IconData icon, String text) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 8.0),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Icon(icon, size: 20, color: Colors.grey),
-          const SizedBox(width: 10),
-          Text(text, style: const TextStyle(color: Colors.black54, fontWeight: FontWeight.w500)),
-        ],
-      ),
-    );
-  }
-}
+# -----------------------------------------------------------------------------
+# 5. PAGE VIEWS
+# -----------------------------------------------------------------------------
 
-// ---------------------------------------------------------------------------
-// 5. QUIZ SCREEN (The Core Logic)
-// ---------------------------------------------------------------------------
+def show_home():
+    st.markdown("<br>", unsafe_allow_html=True)
+    col1, col2, col3 = st.columns([1, 2, 1])
+    with col2:
+        st.title("🧠")
+        st.title("Standardized IQ Test")
+        st.markdown(
+            "<p style='text-align: center; color: #666;'>Determine your cognitive potential with our Raven's Matrices inspired test.</p>", 
+            unsafe_allow_html=True
+        )
+        
+        st.markdown("---")
+        c1, c2 = st.columns(2)
+        with c1:
+            st.info("**⏱️ Duration**\n\n15-20 Minutes")
+        with c2:
+            st.info("**❓ Questions**\n\n30 Items")
+            
+        st.markdown("<br>", unsafe_allow_html=True)
+        
+        if st.button("START CERTIFICATION START"):
+            start_quiz()
+            
+        st.markdown(
+            "<p style='text-align: center; font-size: 0.8em; color: #999; margin-top: 20px;'>Scientific calculation • Instant results • Mobile optimized</p>", 
+            unsafe_allow_html=True
+        )
 
-class QuizScreen extends StatefulWidget {
-  const QuizScreen({super.key});
+def show_quiz():
+    q_index = st.session_state.current_q
+    question = QUESTIONS[q_index]
+    total = len(QUESTIONS)
+    
+    # Progress Bar
+    progress = (q_index + 1) / total
+    st.progress(progress)
+    
+    # Header info
+    c1, c2 = st.columns([3, 1])
+    with c1:
+        st.caption(f"Question {q_index + 1} of {total}")
+    with c2:
+        # Simple timer calculation (mock display as Streamlit doesn't auto-update seconds)
+        elapsed = int(time.time() - st.session_state.start_time)
+        mins, secs = divmod(elapsed, 60)
+        st.caption(f"⏱️ {mins:02}:{secs:02}")
 
-  @override
-  State<QuizScreen> createState() => _QuizScreenState();
-}
+    st.markdown("---")
 
-class _QuizScreenState extends State<QuizScreen> {
-  int _currentIndex = 0;
-  int _score = 0;
-  int _timeLeft = 1200; // 20 minutes in seconds
-  Timer? _timer;
-  
-  // Track selected answers
-  final Map<int, int> _answers = {};
+    # VISUAL QUESTION PLACEHOLDER
+    # In a real app, use st.image("assets/q1.png")
+    st.markdown(f"""
+    <div style="background-color: #eef2f5; height: 200px; display: flex; align-items: center; justify-content: center; border-radius: 10px; margin-bottom: 20px; border: 2px dashed #cbd5e0;">
+        <h3 style="color: #6c757d;">{question['text']}</h3>
+        <!-- You would put your IQ Matrix Image here -->
+    </div>
+    """, unsafe_allow_html=True)
 
-  @override
-  void initState() {
-    super.initState();
-    _startTimer();
-  }
-
-  void _startTimer() {
-    _timer = Timer.periodic(const Duration(seconds: 1), (timer) {
-      if (_timeLeft > 0) {
-        setState(() => _timeLeft--);
-      } else {
-        _finishTest();
-      }
-    });
-  }
-
-  @override
-  void dispose() {
-    _timer?.cancel();
-    super.dispose();
-  }
-
-  void _answerQuestion(int optionIndex) {
-    setState(() {
-      _answers[_currentIndex] = optionIndex;
-    });
-
-    // Auto advance after short delay
-    Future.delayed(const Duration(milliseconds: 300), () {
-      if (_currentIndex < demoQuestions.length - 1) {
-        setState(() => _currentIndex++);
-      } else {
-        _finishTest();
-      }
-    });
-  }
-
-  void _finishTest() {
-    _timer?.cancel();
-    // Calculate raw score
-    _score = 0;
-    _answers.forEach((index, answer) {
-      if (demoQuestions[index].correctOptionIndex == answer) {
-        _score++;
-      }
-    });
-
-    Navigator.pushReplacement(
-      context, 
-      MaterialPageRoute(builder: (context) => ResultScreen(rawScore: _score, totalQuestions: demoQuestions.length))
-    );
-  }
-
-  String get _timerString {
-    final minutes = (_timeLeft / 60).floor();
-    final seconds = _timeLeft % 60;
-    return '${minutes.toString().padLeft(2, '0')}:${seconds.toString().padLeft(2, '0')}';
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final question = demoQuestions[_currentIndex];
-    final progress = (_currentIndex + 1) / demoQuestions.length;
-
-    return Scaffold(
-      appBar: AppBar(
-        automaticallyImplyLeading: false,
-        backgroundColor: Colors.transparent,
-        elevation: 0,
-        title: Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          children: [
-            Text("Q ${_currentIndex + 1} / ${demoQuestions.length}", 
-                style: const TextStyle(color: Colors.black87, fontWeight: FontWeight.bold)),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-              decoration: BoxDecoration(
-                color: Colors.red.withOpacity(0.1),
-                borderRadius: BorderRadius.circular(20),
-              ),
-              child: Row(
-                children: [
-                  const Icon(Icons.timer_outlined, color: Colors.red, size: 16),
-                  const SizedBox(width: 4),
-                  Text(_timerString, style: const TextStyle(color: Colors.red, fontWeight: FontWeight.bold)),
-                ],
-              ),
-            )
-          ],
-        ),
-        bottom: PreferredSize(
-          preferredSize: const Size.fromHeight(6),
-          child: LinearProgressIndicator(
-            value: progress,
-            backgroundColor: Colors.grey[300],
-            valueColor: AlwaysStoppedAnimation<Color>(Theme.of(context).primaryColor),
-          ),
-        ),
-      ),
-      body: Column(
-        children: [
-          // THE PUZZLE (Matrix)
-          Expanded(
-            flex: 4,
-            child: Container(
-              margin: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(20),
-                boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.05), blurRadius: 10, offset: const Offset(0, 5))],
-              ),
-              child: Center(
-                // In a real app, use Image.asset(question.imagePath)
-                child: Icon(question.visualPattern, size: 150, color: Colors.black87),
-              ),
-            ),
-          ),
-          
-          const Text("Select the missing piece:", style: TextStyle(color: Colors.grey, fontSize: 16)),
-          const SizedBox(height: 10),
-
-          // THE OPTIONS
-          Expanded(
-            flex: 3,
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16.0),
-              child: GridView.builder(
-                itemCount: question.options.length,
-                gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                  crossAxisCount: 2,
-                  childAspectRatio: 2.5,
-                  crossAxisSpacing: 12,
-                  mainAxisSpacing: 12,
-                ),
-                itemBuilder: (ctx, index) {
-                  final isSelected = _answers[_currentIndex] == index;
-                  return InkWell(
-                    onTap: () => _answerQuestion(index),
-                    child: AnimatedContainer(
-                      duration: const Duration(milliseconds: 200),
-                      decoration: BoxDecoration(
-                        color: isSelected ? Theme.of(context).primaryColor.withOpacity(0.1) : Colors.white,
-                        border: Border.all(
-                          color: isSelected ? Theme.of(context).primaryColor : Colors.grey.shade300,
-                          width: 2
-                        ),
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      child: Center(
-                        child: Icon(question.options[index], 
-                          color: isSelected ? Theme.of(context).primaryColor : Colors.black54),
-                      ),
-                    ),
-                  );
-                },
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-// ---------------------------------------------------------------------------
-// 6. RESULT SCREEN
-// ---------------------------------------------------------------------------
-
-class ResultScreen extends StatefulWidget {
-  final int rawScore;
-  final int totalQuestions;
-
-  const ResultScreen({super.key, required this.rawScore, required this.totalQuestions});
-
-  @override
-  State<ResultScreen> createState() => _ResultScreenState();
-}
-
-class _ResultScreenState extends State<ResultScreen> with SingleTickerProviderStateMixin {
-  late AnimationController _controller;
-  late Animation<double> _animation;
-  int _calculatedIQ = 0;
-
-  @override
-  void initState() {
-    super.initState();
-    // Simple Gaussian calculation approximation (Mean 100, SD 15)
-    // In a real app, use age-normed tables.
-    double percentage = widget.rawScore / widget.totalQuestions;
-    // This is a dummy formula for visual representation only
-    int baseIQ = 70 + (percentage * 70).round(); 
-    _calculatedIQ = baseIQ;
-
-    _controller = AnimationController(vsync: this, duration: const Duration(seconds: 2));
-    _animation = Tween<double>(begin: 0, end: _calculatedIQ.toDouble()).animate(
-      CurvedAnimation(parent: _controller, curve: Curves.easeOut)
-    );
-    _controller.forward();
-  }
-
-  @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      body: SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.all(24.0),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              const Text("TEST COMPLETE", style: TextStyle(letterSpacing: 2, fontWeight: FontWeight.bold, color: Colors.grey)),
-              const SizedBox(height: 30),
-              Container(
-                height: 200,
-                width: 200,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  border: Border.all(color: Theme.of(context).primaryColor, width: 8),
-                  color: Colors.white,
-                ),
-                child: Center(
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      const Text("Your IQ", style: TextStyle(fontSize: 18, color: Colors.grey)),
-                      AnimatedBuilder(
-                        animation: _animation,
-                        builder: (context, child) {
-                          return Text(
-                            _animation.value.toStringAsFixed(0),
-                            style: TextStyle(
-                              fontSize: 60, 
-                              fontWeight: FontWeight.w900, 
-                              color: Theme.of(context).primaryColor
-                            ),
-                          );
-                        },
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-              const SizedBox(height: 40),
-              Card(
-                elevation: 0,
-                color: Colors.white,
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-                child: Padding(
-                  padding: const EdgeInsets.all(16.0),
-                  child: Column(
-                    children: [
-                      _buildDetailRow("Correct Answers", "${widget.rawScore}/${widget.totalQuestions}"),
-                      const Divider(),
-                      _buildDetailRow("Percentile", "Top ${100 - ((widget.rawScore/widget.totalQuestions)*100).round()}%"),
-                      const Divider(),
-                      _buildDetailRow("Classification", _getClassification(_calculatedIQ)),
-                    ],
-                  ),
-                ),
-              ),
-              const Spacer(),
-              SizedBox(
-                width: double.infinity,
-                height: 56,
-                child: ElevatedButton(
-                  onPressed: () {
-                    // Placeholder for "Get Detailed Report" (In-App Purchase)
-                    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Redirecting to Pro Payment...")));
-                  },
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFF34C759),
-                    foregroundColor: Colors.white,
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-                  ),
-                  child: const Text("GET FULL CERTIFICATE", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-                ),
-              ),
-              TextButton(
-                onPressed: () => Navigator.pop(context),
-                child: const Text("Retake Test", style: TextStyle(color: Colors.grey)),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  String _getClassification(int iq) {
-    if (iq >= 130) return "Very Superior";
-    if (iq >= 120) return "Superior";
-    if (iq >= 110) return "High Average";
-    if (iq >= 90) return "Average";
-    return "Below Average";
-  }
-
-  Widget _buildDetailRow(String label, String value) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 8.0),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: [
-          Text(label, style: const TextStyle(fontSize: 16, color: Colors.black54)),
-          Text(value, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
-        ],
-      ),
-    );
-  }
-}
+    # Options Grid
+    opts = question['options']
+    
+    # Create a 2x2 grid for buttons
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        if st.button(opts[0], key=f"q{q_index}_opt0"): submit_answer(0)
+        if st.button(opts[2], key=f"q{q_index}_opt2"): submit_answer(2)
+        
+    with col2:
+        if st.button(opts[1], key=f"q{q_index}_opt1"): submit_answer(1)
+        if
