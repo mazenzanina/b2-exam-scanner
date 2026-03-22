@@ -4,85 +4,122 @@ import pypdf
 import json
 import re
 import hashlib
+import time
 
 # -----------------------------------------------------------------------------
-# 1. PAGE CONFIGURATION & LIQUID GLASS UI
+# 1. PAGE CONFIGURATION & "TELC/VERCEL" CSS
 # -----------------------------------------------------------------------------
 st.set_page_config(
-    page_title="Ultra Exam Tutor AI",
-    page_icon="🧠",
+    page_title="Digital Exam Simulator",
+    page_icon="🎓",
     layout="wide",
-    initial_sidebar_state="expanded"
+    initial_sidebar_state="collapsed"
 )
 
-# Custom CSS for Liquid Glassmorphism & Arabic Support
 st.markdown("""
     <style>
-    /* Main Background */
+    /* Clean, flat design mimicking modern React/Vercel apps */
     .stApp {
-        background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
+        background-color: #f7f9fa;
+        font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
     }
     
-    /* Liquid Glass Cards */
-    .glass-card {
-        background: rgba(255, 255, 255, 0.65);
-        backdrop-filter: blur(12px);
-        -webkit-backdrop-filter: blur(12px);
-        border-radius: 20px;
-        border: 1px solid rgba(255, 255, 255, 0.3);
-        box-shadow: 0 8px 32px 0 rgba(31, 38, 135, 0.07);
-        padding: 20px;
-        margin-bottom: 20px;
-        transition: transform 0.2s;
-    }
-    .glass-card:hover {
-        transform: translateY(-2px);
-        box-shadow: 0 12px 40px 0 rgba(31, 38, 135, 0.1);
-    }
-
-    /* Tab Styling */
-    .stTabs [data-baseweb="tab-list"] {
-        gap: 8px;
-        background: rgba(255, 255, 255, 0.4);
-        padding: 10px;
-        border-radius: 15px;
-        backdrop-filter: blur(10px);
-    }
-    .stTabs [data-baseweb="tab"] {
-        background-color: transparent;
-        border: none;
-        font-weight: 600;
-    }
-    .stTabs [data-baseweb="tab"][aria-selected="true"] {
+    /* Login & Main Cards */
+    .exam-card {
         background-color: #ffffff;
-        border-radius: 10px;
-        color: #2c3e50;
-        box-shadow: 0 4px 6px rgba(0,0,0,0.05);
+        border: 1px solid #e1e4e8;
+        border-radius: 8px;
+        padding: 40px;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
+        margin-top: 5vh;
+    }
+    
+    /* Typography */
+    h1, h2, h3 {
+        color: #1a202c !important;
+        font-weight: 700 !important;
+        letter-spacing: -0.5px;
+    }
+    p, span, label {
+        color: #4a5568 !important;
+    }
+    
+    /* Primary Buttons (The "Telc/Vercel" Blue/Black) */
+    div.stButton > button {
+        background-color: #1a202c;
+        color: #ffffff;
+        border: none;
+        border-radius: 6px;
+        padding: 0.5rem 1rem;
+        font-weight: 600;
+        width: 100%;
+        transition: all 0.2s ease;
+    }
+    div.stButton > button:hover {
+        background-color: #2d3748;
+        color: white;
+        transform: translateY(-1px);
+    }
+    
+    /* Secondary Action Button (Submit/Grade) */
+    .btn-grade > button {
+        background-color: #0070f3 !important; /* Vercel Blue */
+    }
+    .btn-grade > button:hover {
+        background-color: #0051a2 !important;
     }
 
-    /* Titles and text */
-    h1, h2, h3 { color: #2c3e50; font-family: 'Segoe UI', sans-serif; }
+    /* Radio buttons & Inputs (Exam feel) */
+    .stRadio > div {
+        background: #ffffff;
+        padding: 15px;
+        border-radius: 8px;
+        border: 1px solid #e2e8f0;
+        margin-bottom: 10px;
+    }
+    .stTextArea textarea {
+        border-radius: 8px;
+        border: 1px solid #e2e8f0;
+        background: #fdfdfd;
+    }
     
-    /* Right-to-Left support for Arabic */
-    .rtl { direction: rtl; text-align: right; }
+    /* Timer / Header Banner */
+    .exam-header {
+        background: #ffffff;
+        border-bottom: 1px solid #e2e8f0;
+        padding: 15px 30px;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 30px;
+        border-radius: 8px;
+    }
+    .exam-header h3 { margin: 0; font-size: 1.2rem; }
+    .timer { font-family: monospace; font-size: 1.2rem; color: #e53e3e !important; font-weight: bold;}
     </style>
 """, unsafe_allow_html=True)
 
 # -----------------------------------------------------------------------------
-# 2. SESSION STATE MANAGEMENT (The Memory)
+# 2. STATE MANAGEMENT (Login, Dashboard, Exam)
 # -----------------------------------------------------------------------------
-if 'library' not in st.session_state:
-    st.session_state.library = {}  # Stores analyzed data: {file_id: data_dict}
-if 'current_file_id' not in st.session_state:
-    st.session_state.current_file_id = None
+if 'page' not in st.session_state:
+    st.session_state.page = "login" # login, dashboard, exam, results
+if 'exam_data' not in st.session_state:
+    st.session_state.exam_data = None
+if 'user_answers' not in st.session_state:
+    st.session_state.user_answers = {}
 
 # -----------------------------------------------------------------------------
-# 3. HELPER FUNCTIONS
+# 3. CORE LOGIC & AI ENGINE
 # -----------------------------------------------------------------------------
-
-def get_file_hash(file_bytes):
-    """Creates a unique ID for a file so we don't re-analyze it."""
-    return hashlib.md5(file_bytes).hexdigest()
+def robust_json_extractor(text):
+    try:
+        if not text: return None
+        start = text.find('{')
+        end = text.rfind('}') + 1
+        if start == -1 or end == 0: return None
+        return json.loads(text[start:end])
+    except: return None
 
 def extract_text(uploaded_file):
     try:
@@ -91,212 +128,233 @@ def extract_text(uploaded_file):
         for page in reader.pages:
             content = page.extract_text()
             if content: text += content + "\n"
-        return text
-    except:
-        return None
+        return text if len(text) > 20 else None
+    except: return None
 
-def clean_json(json_str):
-    json_str = re.sub(r'```json', '', json_str)
-    json_str = re.sub(r'```', '', json_str)
-    return json_str.strip()
-
-def get_language_prompts(lang_code):
-    """Returns UI text and AI prompts based on selected language."""
-    prompts = {
-        "English": {
-            "role": "You are a strict Exam Tutor. Output answers in English where appropriate.",
-            "ui_upload": "Upload PDF Exams",
-            "ui_analyze": "Analyze File",
-            "tabs": ["📖 Reading", "🎧 Listening", "✍️ Writing", "🗣️ Speaking", "🧩 Grammar"],
-            "keys": ["Reading", "Listening", "Writing", "Speaking", "Grammar"]
-        },
-        "Deutsch": {
-            "role": "Du bist ein strenger Deutschlehrer. Antworte auf Deutsch.",
-            "ui_upload": "PDF-Prüfungen hochladen",
-            "ui_analyze": "Datei analysieren",
-            "tabs": ["📖 Lesen", "🎧 Hören", "✍️ Schreiben", "🗣️ Sprechen", "🧩 Grammatik"],
-            "keys": ["Reading", "Listening", "Writing", "Speaking", "Grammar"]
-        },
-        "Français": {
-            "role": "Tu es un professeur expert. Réponds en français.",
-            "ui_upload": "Télécharger des examens PDF",
-            "ui_analyze": "Analyser le fichier",
-            "tabs": ["📖 Lecture", "🎧 Écoute", "✍️ Écriture", "🗣️ Oral", "🧩 Grammaire"],
-            "keys": ["Reading", "Listening", "Writing", "Speaking", "Grammar"]
-        },
-        "العربية": {
-            "role": "أنت معلم خبير للامتحانات. اشرح وقدم الإجابات باللغة العربية.",
-            "ui_upload": "تحميل ملفات PDF",
-            "ui_analyze": "تحليل الملف",
-            "tabs": ["📖 القراءة", "🎧 الاستماع", "✍️ الكتابة", "🗣️ التحدث", "🧩 القواعد"],
-            "keys": ["Reading", "Listening", "Writing", "Speaking", "Grammar"]
-        }
-    }
-    return prompts.get(lang_code, prompts["English"])
-
-def analyze_single_file(api_key, text, lang_config, lang_name):
-    """Deep analysis of a single file."""
+def generate_interactive_exam(api_key, text):
+    """
+    Turns the PDF into an interactive JSON test format.
+    """
     genai.configure(api_key=api_key)
+    models =[m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
+    model_name = 'models/gemini-1.5-flash' if 'models/gemini-1.5-flash' in models else models[0]
+    model = genai.GenerativeModel(model_name)
     
-    # Smart Model Selection
-    try:
-        models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
-        model_name = 'models/gemini-1.5-flash' if 'models/gemini-1.5-flash' in models else models[0]
-        model = genai.GenerativeModel(model_name)
-    except:
-        return None, "API Connection Failed. Check Key."
-
-    # The Prompt
     prompt = f"""
-    {lang_config['role']}
-    Target Language for Explanations: {lang_name}
+    You are an expert German B2/C1 Exam Creator (Telc/Goethe standard).
+    Analyze the uploaded text. If it is a mock exam, extract the reading questions and writing prompts.
+    If it is just a text, CREATE 3 Multiple Choice Questions and 1 Writing Prompt based on the topic.
     
-    TASK: Analyze the provided text (Exam PDF) and extract exercises, vocab, and strategies.
-    Distinguish between Reading, Listening, Writing, Speaking, and Grammar sections.
-
-    OUTPUT: Returns ONLY valid JSON with this exact structure:
+    OUTPUT EXACTLY IN THIS JSON FORMAT:
     {{
-        "Reading": {{ "Summary": "text", "Vocab": ["word - definition"], "Exercises": [{{ "Q": "Question text", "A": "Answer text", "Tip": "Strategy tip" }}] }},
-        "Listening": {{ "Summary": "text", "Vocab": [], "Exercises": [{{ "Q": "...", "A": "...", "Tip": "..." }}] }},
-        "Writing": {{ "Summary": "text", "Vocab": [], "Exercises": [{{ "Q": "Topic...", "A": "Sample Answer...", "Tip": "Structure tip" }}] }},
-        "Speaking": {{ "Summary": "text", "Vocab": [], "Exercises": [{{ "Q": "Topic...", "A": "Key points...", "Tip": "..." }}] }},
-        "Grammar": {{ "Summary": "text", "Topics": ["Topic 1", "Topic 2"], "Exercises": [{{ "Q": "Fill in blank...", "A": "Correct answer", "Tip": "Rule explanation" }}] }}
+        "Lesen": {{
+            "Text_Context": "Summary or specific paragraph to read.",
+            "Questions":[
+                {{
+                    "id": "q1",
+                    "question": "The question text?",
+                    "options":["Option A", "Option B", "Option C"],
+                    "correct": "Option A"
+                }},
+                {{
+                    "id": "q2",
+                    "question": "Next question?",
+                    "options":["A", "B", "C"],
+                    "correct": "B"
+                }}
+            ]
+        }},
+        "Schreiben": {{
+            "Prompt": "Write an email/essay about..."
+        }}
     }}
-
-    If a section is missing in the text, leave the arrays empty but keep the keys.
-    Analyze the following text (truncated to 30k chars):
-    {text[:30000]}
+    
+    TEXT: {text[:25000]}
     """
     
     try:
         response = model.generate_content(prompt)
-        return response.text, None
+        return response.text
     except Exception as e:
-        return None, str(e)
+        return f"API_ERROR: {str(e)}"
+
+def evaluate_writing(api_key, prompt, user_text):
+    genai.configure(api_key=api_key)
+    model = genai.GenerativeModel('gemini-1.5-flash')
+    sys_prompt = f"Grade this B2 German text. Prompt: {prompt}. User Text: {user_text}. Give a score (out of 10) and 2 sentences of feedback."
+    try:
+        return model.generate_content(sys_prompt).text
+    except:
+        return "Evaluation failed."
 
 # -----------------------------------------------------------------------------
-# 4. MAIN APPLICATION
+# 4. VIEWS (Login -> Dashboard -> Exam Simulator)
 # -----------------------------------------------------------------------------
 
-def main():
-    # --- Sidebar Configuration ---
-    with st.sidebar:
-        st.image("https://img.icons8.com/3d-fluency/94/brain.png", width=80)
-        st.title("Ultra Tutor AI")
-        
-        # Language Selector
-        selected_lang = st.selectbox("Interface Language / Sprache / اللغة", 
-                                     ["English", "Deutsch", "Français", "العربية"])
-        
-        config = get_language_prompts(selected_lang)
-        is_rtl = selected_lang == "العربية"
-        
-        # API Key
-        api_key = st.text_input("Google API Key", type="password")
-        
-        st.markdown("---")
-        
-        # File Uploader
-        uploaded_files = st.file_uploader(config["ui_upload"], type="pdf", accept_multiple_files=True)
-        
-        # Processing Logic
-        if uploaded_files and api_key:
-            if st.button(config["ui_analyze"], type="primary", use_container_width=True):
-                with st.spinner("Processing... / Verarbeite... / جاري المعالجة..."):
-                    for up_file in uploaded_files:
-                        # 1. Read File
-                        file_bytes = up_file.getvalue()
-                        file_hash = get_file_hash(file_bytes)
-                        
-                        # Only process if not already in library
-                        if file_hash not in st.session_state.library:
-                            text = extract_text(up_file)
-                            if text:
-                                json_res, err = analyze_single_file(api_key, text, config, selected_lang)
-                                if json_res:
-                                    try:
-                                        data = json.loads(clean_json(json_res))
-                                        # Save to Library
-                                        st.session_state.library[file_hash] = {
-                                            "name": up_file.name,
-                                            "data": data,
-                                            "lang": selected_lang
-                                        }
-                                    except:
-                                        st.error(f"Failed to parse {up_file.name}")
-                    st.success(f"Library Updated! {len(st.session_state.library)} Files ready.")
-
-    # --- Main Content Area ---
-    
-    # 1. Library Grid (If no file selected or just landing)
-    if not st.session_state.library:
-        st.markdown(f"""
-        <div class="glass-card" style="text-align: center; padding: 50px;">
-            <h2 style='font-size: 30px;'>👋 Welcome to Ultra Tutor</h2>
-            <p style='color: #666;'>Upload your PDF Exams to create an interactive study hub.</p>
-            <p style='color: #888; font-size: 0.9em;'>Supports Goethe, Telc, DALF, TOEFL and more.</p>
+def view_login():
+    """Mock Login Screen matching the portal vibe."""
+    col1, col2, col3 = st.columns([1, 1.5, 1])
+    with col2:
+        st.markdown("""
+        <div class="exam-card">
+            <div style="text-align: center; margin-bottom: 30px;">
+                <img src="https://img.icons8.com/color/96/germany.png" width="60">
+                <h2>Digital Exam Portal</h2>
+                <p>Please log in to access your modules</p>
+            </div>
         </div>
         """, unsafe_allow_html=True)
-    
-    else:
-        # File Selector (The "Organizer")
-        file_options = {v['name']: k for k, v in st.session_state.library.items()}
-        selected_name = st.selectbox("📚 Select Document / Wähle ein Dokument / اختر ملف", list(file_options.keys()))
         
-        if selected_name:
-            file_id = file_options[selected_name]
-            file_data = st.session_state.library[file_id]["data"]
-            
-            st.markdown(f"<div class='glass-card'><h2>📄 {selected_name}</h2></div>", unsafe_allow_html=True)
-            
-            # Display Tabs
-            tabs = st.tabs(config["tabs"])
-            keys = config["keys"] # Reading, Listening, etc.
-            
-            for i, tab in enumerate(tabs):
-                section_key = keys[i]
-                with tab:
-                    if section_key in file_data:
-                        sec_content = file_data[section_key]
-                        
-                        # Summary Section
-                        st.markdown(f"""
-                        <div class="glass-card" {'class="rtl"' if is_rtl else ''}>
-                            <h4 style="margin-top:0;">📌 Summary / Überblick / ملخص</h4>
-                            {sec_content.get('Summary', 'No summary available.')}
-                        </div>
-                        """, unsafe_allow_html=True)
-                        
-                        # Vocab Section
-                        vocab = sec_content.get("Vocab", [])
-                        if vocab:
-                            with st.expander("📝 Vocabulary List / Wortschatz / المفردات"):
-                                for v in vocab:
-                                    st.markdown(f"- {v}")
-                        
-                        # Interactive Exercises
-                        exercises = sec_content.get("Exercises", [])
-                        if exercises:
-                            st.subheader("🧩 Exercises / Übungen / التمارين")
-                            for idx, ex in enumerate(exercises):
-                                # Using container for visual separation
-                                with st.container():
-                                    st.markdown(f"**Q{idx+1}:** {ex.get('Q', '')}")
-                                    
-                                    # Tip Toggle
-                                    if 'Tip' in ex and ex['Tip']:
-                                        if st.toggle(f"💡 Hint/Tipp {idx+1}", key=f"tip_{file_id}_{section_key}_{idx}"):
-                                            st.info(ex['Tip'])
-                                            
-                                    # Answer Toggle
-                                    if st.button(f"👁️ Reveal Answer {idx+1}", key=f"ans_{file_id}_{section_key}_{idx}"):
-                                        st.success(f"✅ {ex.get('A', '')}")
-                                    
-                                    st.divider()
+        # Streamlit inputs just below the HTML card to keep functionality
+        email = st.text_input("Email / Candidate ID", placeholder="candidate@exam.com")
+        pwd = st.text_input("Password", type="password", placeholder="••••••••")
+        
+        if st.button("Log In"):
+            st.session_state.page = "dashboard"
+            st.rerun()
+
+def view_dashboard():
+    """File Upload and Exam Generation."""
+    st.markdown("""
+        <div class="exam-header">
+            <h3>🎓 Candidate Dashboard</h3>
+            <span style="color: #4a5568;">Status: Ready</span>
+        </div>
+    """, unsafe_allow_html=True)
+    
+    col1, col2 = st.columns([2, 1])
+    
+    with col1:
+        st.markdown("### Prepare Your Exam Session")
+        st.write("Upload a PDF (Textbook, Mock Exam, or Article). The AI will construct a simulated test environment from it.")
+        
+        uploaded_file = st.file_uploader("Upload Exam Material (PDF)", type=["pdf"])
+        api_key = st.text_input("Enter your AI Key to initialize Simulator", type="password")
+        
+        if uploaded_file and api_key:
+            if st.button("🚀 Start Simulator Session"):
+                with st.spinner("Analyzing text and generating exam environment..."):
+                    txt = extract_text(uploaded_file)
+                    if txt:
+                        raw_json = generate_interactive_exam(api_key, txt)
+                        data = robust_json_extractor(raw_json)
+                        if data:
+                            st.session_state.exam_data = data
+                            st.session_state.user_answers = {}
+                            st.session_state.api_key = api_key # save for grading
+                            st.session_state.page = "exam"
+                            st.rerun()
                         else:
-                            st.info("No specific exercises detected for this section.")
+                            st.error("Failed to generate exam structure. Please try a different PDF.")
                     else:
-                        st.warning("No data found for this section.")
+                        st.error("Could not read text from PDF.")
+
+    with col2:
+        st.info("**Instructions:**\n1. Ensure stable connection.\n2. Once started, the timer will begin.\n3. Complete Reading and Writing sections.")
+
+def view_exam():
+    """The Interactive Exam Environment."""
+    st.markdown("""
+        <div class="exam-header">
+            <h3>📝 Module: Lesen & Schreiben</h3>
+            <div class="timer">⏱️ 45:00</div>
+        </div>
+    """, unsafe_allow_html=True)
+    
+    data = st.session_state.exam_data
+    
+    # --- LESEN (Reading Section) ---
+    st.markdown("## Teil 1: Leseverstehen")
+    lesen = data.get("Lesen", {})
+    
+    st.info(f"**Context / Text:**\n{lesen.get('Text_Context', 'Read the uploaded document.')}")
+    st.markdown("---")
+    
+    for q in lesen.get("Questions", []):
+        st.markdown(f"**{q['question']}**")
+        # Radio button for options
+        choice = st.radio("Select answer:", q['options'], key=q['id'], index=None)
+        st.session_state.user_answers[q['id']] = choice
+        st.write("") # spacing
+        
+    # --- SCHREIBEN (Writing Section) ---
+    st.markdown("---")
+    st.markdown("## Teil 2: Schriftlicher Ausdruck")
+    schreiben = data.get("Schreiben", {})
+    prompt = schreiben.get("Prompt", "Write a short essay.")
+    
+    st.warning(f"**Aufgabe:** {prompt}")
+    writing_ans = st.text_area("Type your text here...", height=250, key="writing_task")
+    st.session_state.user_answers["writing"] = writing_ans
+    
+    # --- SUBMIT ---
+    st.markdown("---")
+    st.markdown("<div class='btn-grade'>", unsafe_allow_html=True)
+    if st.button("Submit Exam & View Results"):
+        st.session_state.page = "results"
+        st.rerun()
+    st.markdown("</div>", unsafe_allow_html=True)
+
+def view_results():
+    """Evaluation Screen."""
+    st.markdown("""
+        <div class="exam-header">
+            <h3>📊 Evaluation Report</h3>
+        </div>
+    """, unsafe_allow_html=True)
+    
+    data = st.session_state.exam_data
+    answers = st.session_state.user_answers
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.markdown("### Reading Results")
+        score = 0
+        total = len(data.get("Lesen", {}).get("Questions",[]))
+        
+        for q in data.get("Lesen", {}).get("Questions", []):
+            user_choice = answers.get(q['id'])
+            correct = q.get('correct')
+            
+            if user_choice == correct:
+                score += 1
+                st.success(f"**Q: {q['question']}**\n\n✅ You chose: {user_choice}")
+            else:
+                st.error(f"**Q: {q['question']}**\n\n❌ You chose: {user_choice} (Correct: {correct})")
+                
+        st.metric("Reading Score", f"{score} / {total}")
+
+    with col2:
+        st.markdown("### Writing Evaluation")
+        user_text = answers.get("writing", "")
+        if not user_text.strip():
+            st.warning("No text submitted.")
+        else:
+            with st.spinner("AI Examiner is reading your text..."):
+                prompt = data.get("Schreiben", {}).get("Prompt", "")
+                feedback = evaluate_writing(st.session_state.api_key, prompt, user_text)
+                
+                st.info("**Your Text:**\n" + user_text[:150] + "...")
+                st.markdown("### 🤖 Examiner Feedback:")
+                st.write(feedback)
+
+    if st.button("Return to Dashboard"):
+        st.session_state.page = "dashboard"
+        st.rerun()
+
+# -----------------------------------------------------------------------------
+# 5. ROUTER
+# -----------------------------------------------------------------------------
+def main():
+    if st.session_state.page == "login":
+        view_login()
+    elif st.session_state.page == "dashboard":
+        view_dashboard()
+    elif st.session_state.page == "exam":
+        view_exam()
+    elif st.session_state.page == "results":
+        view_results()
 
 if __name__ == "__main__":
     main()
