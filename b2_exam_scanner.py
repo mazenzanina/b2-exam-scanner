@@ -1,13 +1,22 @@
-from flask import Flask, render_template_string, jsonify
-from collections import defaultdict
+import streamlit as st
+import time
+import re
+from datetime import datetime
 
-app = Flask(__name__)
+st.set_page_config(
+    page_title="TELC B2 Simulator",
+    page_icon="🇩🇪",
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
 
-# Publicly visible catalog structure from the page.
-# The full question texts are not reproduced here.
-EXAM = {
+# ----------------------------
+# Data extracted from the public page structure
+# ----------------------------
+EXAM_STRUCTURE = {
     "Lesen": {
         "label": "Reading",
+        "minutes": 60,
         "parts": [
             {
                 "name": "Lesen Teil 1",
@@ -53,6 +62,7 @@ EXAM = {
     },
     "Sprachbausteine": {
         "label": "Grammar",
+        "minutes": 40,
         "parts": [
             {
                 "name": "Sprachbausteine Teil 1",
@@ -90,32 +100,36 @@ EXAM = {
     },
     "Hören": {
         "label": "Listening",
+        "minutes": 45,
         "parts": [
             {
                 "name": "Hören Teil 1",
                 "kind": "listening",
                 "minutes": 15,
-                "titles": ["Lufthansa", "Erdbeben", "Bierkonsum", "Schiff", "Vögel", "Europäischen",
-                           "Wetter", "Nicht sicher", "Die Stadt Friedrichsberg", "Frau Jürgens",
-                           "Die Wahlbeteiligung", "In den Alpen", "In den Alpen 2", "Insel Bali",
-                           "Die Fluggeselschaft", "Der Bau", "50-Euro", "Das Schladminger"]
+                "titles": [
+                    "Lufthansa", "Erdbeben", "Bierkonsum", "Schiff", "Vögel", "Europäischen",
+                    "Wetter", "Nicht sicher", "Die Stadt Friedrichsberg", "Frau Jürgens",
+                    "Die Wahlbeteiligung", "In den Alpen", "In den Alpen 2", "Insel Bali",
+                    "Die Fluggeselschaft", "Der Bau", "50-Euro", "Das Schladminger"
+                ],
             },
             {
                 "name": "Hören Teil 2",
                 "kind": "listening",
                 "minutes": 15,
-                "titles": ["Teil 2 – add your licensed audio + questions here"]
+                "titles": ["Teil 2 – add your licensed audio and questions here"],
             },
             {
                 "name": "Hören Teil 3",
                 "kind": "listening",
                 "minutes": 15,
-                "titles": ["Teil 3 – add your licensed audio + questions here"]
+                "titles": ["Teil 3 – add your licensed audio and questions here"],
             },
         ],
     },
     "Schreiben": {
         "label": "Writing",
+        "minutes": 30,
         "parts": [
             {
                 "name": "Beschwerdebrief",
@@ -134,581 +148,596 @@ EXAM = {
     },
     "Sprechen": {
         "label": "Speaking",
+        "minutes": 15,
         "parts": [
             {
                 "name": "Teil 1",
                 "kind": "speaking",
                 "minutes": 5,
-                "titles": ["Presentation topics from the 5-page PDF"]
+                "titles": ["Presentation topics from the linked PDF"],
             },
             {
                 "name": "Teil 2 + 3",
                 "kind": "speaking",
                 "minutes": 10,
-                "titles": ["Interactive speaking topics"]
+                "titles": ["Interactive speaking topics"],
             },
             {
                 "name": "Struktur 2 + 3",
                 "kind": "speaking",
                 "minutes": 10,
-                "titles": ["Question/answer structure cards"]
+                "titles": ["Question / answer structure cards"],
             },
         ],
     },
 }
 
-def flatten_catalog():
+SECTION_ORDER = ["Lesen", "Sprachbausteine", "Hören", "Schreiben", "Sprechen"]
+
+# ----------------------------
+# Helpers
+# ----------------------------
+def build_catalog():
     catalog = []
-    for section_key, section in EXAM.items():
-        for part_index, part in enumerate(section["parts"], start=1):
-            for title_index, title in enumerate(part["titles"], start=1):
+    for section_key in SECTION_ORDER:
+        section = EXAM_STRUCTURE[section_key]
+        for p_index, part in enumerate(section["parts"], start=1):
+            for t_index, title in enumerate(part["titles"], start=1):
                 catalog.append({
-                    "id": f"{section_key.lower()}-{part_index}-{title_index}",
+                    "id": f"{section_key.lower()}-{p_index}-{t_index}",
                     "section": section_key,
                     "section_label": section["label"],
                     "part": part["name"],
                     "kind": part["kind"],
                     "title": title,
                     "minutes": part.get("minutes", 0),
-                    "min_words": part.get("min_words", None),
+                    "min_words": part.get("min_words"),
                 })
     return catalog
 
-CATALOG = flatten_catalog()
+CATALOG = build_catalog()
 
-HTML = """
-<!DOCTYPE html>
-<html lang="de">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>TELC Simulator</title>
-  <style>
-    :root{
-      --bg:#0b1020;
-      --panel:#111a31;
-      --panel2:#151f3a;
-      --line:rgba(255,255,255,.08);
-      --text:#eef2ff;
-      --muted:#a9b3d4;
-      --accent:#7c8cff;
-      --accent2:#35d0ba;
-      --shadow:0 20px 60px rgba(0,0,0,.35);
-      --radius:20px;
+def init_state():
+    defaults = {
+        "section": "Lesen",
+        "search": "",
+        "selected_id": None,
+        "progress": 0,
+        "started_at": time.time(),
+        "exam_minutes": 90,
+        "writing_texts": {},
     }
-    *{box-sizing:border-box}
-    body{
-      margin:0;
-      font-family:Inter,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
-      color:var(--text);
-      background:
-        radial-gradient(circle at top left, rgba(124,140,255,.15), transparent 25%),
-        radial-gradient(circle at top right, rgba(53,208,186,.12), transparent 20%),
-        linear-gradient(180deg, #080d1a, #0b1020 35%, #090d18 100%);
-    }
-    .wrap{max-width:1320px;margin:0 auto;padding:22px}
-    .topbar{
-      position:sticky;top:16px;z-index:10;
-      display:flex;justify-content:space-between;gap:16px;align-items:center;flex-wrap:wrap;
-      padding:16px 20px;background:rgba(17,26,49,.8);backdrop-filter:blur(14px);
-      border:1px solid var(--line);border-radius:24px;box-shadow:var(--shadow);
-    }
-    .brand{display:flex;align-items:center;gap:14px;font-weight:800}
-    .logo{
-      width:46px;height:46px;border-radius:15px;display:grid;place-items:center;
-      background:linear-gradient(135deg,var(--accent),var(--accent2));
-      color:#08101f;font-weight:900;
-    }
-    .brand small{display:block;color:var(--muted);font-weight:600}
-    .toolbar{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
-    .pill{
-      border:1px solid var(--line);background:rgba(255,255,255,.03);color:var(--text);
-      padding:10px 14px;border-radius:999px;cursor:pointer;font-weight:700;
-    }
-    .pill.active,.pill:hover{background:rgba(124,140,255,.14);border-color:rgba(124,140,255,.28)}
-    .hero{
-      display:grid;grid-template-columns:1.25fr .95fr;gap:18px;margin-top:18px;
-    }
-    .card{
-      background:rgba(17,26,49,.82);backdrop-filter:blur(12px);
-      border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow);
-    }
-    .hero-main{padding:28px}
-    .hero-main h1{margin:0 0 10px;font-size:clamp(30px,4vw,54px);line-height:1.05}
-    .hero-main p{margin:0;color:var(--muted);max-width:68ch;line-height:1.6}
-    .hero-actions{display:flex;gap:12px;flex-wrap:wrap;margin-top:18px}
-    .btn{
-      border:0;border-radius:16px;padding:13px 18px;font-weight:800;cursor:pointer;
-      color:#08101f;background:linear-gradient(135deg,var(--accent),#9aa5ff);
-    }
-    .btn.secondary{background:transparent;color:var(--text);border:1px solid var(--line)}
-    .hero-side{padding:20px;display:grid;gap:12px}
-    .stats{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
-    .stat{
-      padding:16px;border-radius:18px;background:rgba(255,255,255,.03);border:1px solid var(--line)
-    }
-    .stat b{display:block;font-size:22px;margin-bottom:4px}
-    .stat span{color:var(--muted);font-size:12px}
-    .notice{
-      padding:16px;border-radius:18px;background:rgba(53,208,186,.08);border:1px solid rgba(53,208,186,.18);
-      color:#dbfff8;line-height:1.55
-    }
-    .grid{display:grid;grid-template-columns:300px 1fr;gap:18px;margin-top:18px}
-    .sidebar,.content{padding:18px}
-    .sidebar h3,.content h3{margin:0 0 12px}
-    .navlist{display:grid;gap:10px}
-    .navitem{
-      padding:14px 15px;border-radius:16px;border:1px solid var(--line);background:rgba(255,255,255,.03);
-      cursor:pointer;display:flex;justify-content:space-between;gap:10px;align-items:flex-start;
-    }
-    .navitem.active{background:rgba(124,140,255,.14);border-color:rgba(124,140,255,.3)}
-    .navitem small{color:var(--muted)}
-    .sectionhead{display:flex;justify-content:space-between;gap:12px;align-items:flex-end;margin-bottom:14px}
-    .sectionhead h2{margin:0}
-    .sectionhead p{margin:0;color:var(--muted)}
-    .meta{
-      display:flex;gap:10px;flex-wrap:wrap;align-items:center
-    }
-    .badge{
-      display:inline-flex;align-items:center;padding:7px 10px;border-radius:999px;
-      background:rgba(124,140,255,.12);border:1px solid rgba(124,140,255,.24);font-size:12px;font-weight:800
-    }
-    .search{
-      width:100%;padding:14px 14px;border-radius:14px;border:1px solid var(--line);
-      background:rgba(255,255,255,.03);color:var(--text);outline:none;margin:0 0 14px
-    }
-    .packs{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}
-    .pack{
-      padding:18px;border-radius:18px;border:1px solid var(--line);background:rgba(255,255,255,.03)
-    }
-    .pack-top{display:flex;justify-content:space-between;gap:10px;align-items:flex-start}
-    .pack h3{margin:10px 0 8px}
-    .pack p{margin:0;color:var(--muted);line-height:1.55}
-    .tagrow{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}
-    .tag{
-      padding:8px 10px;border-radius:999px;background:rgba(255,255,255,.03);
-      border:1px solid var(--line);color:var(--muted);font-size:12px
-    }
-    .pack button{
-      margin-top:14px;border:0;border-radius:14px;padding:11px 14px;font-weight:800;cursor:pointer;
-      background:linear-gradient(135deg,var(--accent),#9aa5ff);color:#08101f
-    }
-    .footer{color:var(--muted);font-size:13px;line-height:1.6;margin-top:14px}
-    .modal{
-      position:fixed;inset:0;background:rgba(4,7,15,.72);backdrop-filter:blur(10px);
-      display:none;align-items:center;justify-content:center;padding:18px;z-index:30;
-    }
-    .modal.open{display:flex}
-    .modal-card{
-      width:min(980px,100%);max-height:min(92vh,920px);overflow:auto;
-      background:linear-gradient(180deg, rgba(16,24,45,.98), rgba(12,18,35,.98));
-      border:1px solid var(--line);border-radius:26px;box-shadow:var(--shadow);
-    }
-    .modal-head{
-      position:sticky;top:0;background:rgba(16,24,45,.98);border-bottom:1px solid var(--line);
-      padding:18px 20px;display:flex;justify-content:space-between;gap:12px;align-items:center
-    }
-    .modal-body{padding:20px}
-    .panel{
-      border:1px solid var(--line);border-radius:18px;background:rgba(255,255,255,.03);padding:16px
-    }
-    .question{padding:14px 0;border-bottom:1px solid var(--line)}
-    .question:last-child{border-bottom:0}
-    textarea{
-      width:100%;min-height:220px;resize:vertical;border-radius:16px;border:1px solid var(--line);
-      background:rgba(255,255,255,.03);color:var(--text);padding:14px;outline:none;line-height:1.6
-    }
-    .options{display:grid;gap:10px}
-    .option{
-      padding:12px 14px;border-radius:14px;border:1px solid var(--line);background:rgba(255,255,255,.02);
-      cursor:pointer
-    }
-    .option.correct{border-color:rgba(55,214,122,.45);background:rgba(55,214,122,.12)}
-    .option.wrong{border-color:rgba(255,107,107,.45);background:rgba(255,107,107,.12)}
-    .feedback{
-      margin-top:12px;padding:12px 14px;border-radius:14px;border:1px solid var(--line);
-      background:rgba(255,255,255,.03);color:var(--muted)
-    }
-    .feedback.good{border-color:rgba(55,214,122,.35);background:rgba(55,214,122,.08);color:#dcffe8}
-    .feedback.bad{border-color:rgba(255,107,107,.35);background:rgba(255,107,107,.08);color:#ffe4e4}
-    .mini-actions{display:flex;flex-wrap:wrap;gap:10px;margin-top:14px}
-    .ghost{
-      border:1px solid var(--line);background:transparent;color:var(--text);
-      padding:12px 15px;border-radius:14px;cursor:pointer;font-weight:800
-    }
-    .timer{
-      font-variant-numeric:tabular-nums;padding:8px 12px;border-radius:999px;
-      border:1px solid rgba(53,208,186,.24);background:rgba(53,208,186,.08);color:#dbfff8;font-weight:800
-    }
-    .sr-only{position:absolute;left:-9999px}
-    @media (max-width: 980px){
-      .hero,.grid,.packs{grid-template-columns:1fr}
-      .topbar{position:relative;top:0}
-    }
-  </style>
-</head>
-<body>
-  <div class="wrap">
-    <header class="topbar card">
-      <div class="brand">
-        <div class="logo">B2</div>
-        <div>
-          TELC Simulator
-          <small>Modern practice dashboard</small>
-        </div>
-      </div>
-      <div class="toolbar">
-        <span class="timer" id="timerChip">Timer: 30:00</span>
-        <button class="pill active" data-level="Lesen">Lesen</button>
-        <button class="pill" data-level="Sprachbausteine">Sprachbausteine</button>
-        <button class="pill" data-level="Hören">Hören</button>
-        <button class="pill" data-level="Schreiben">Schreiben</button>
-        <button class="pill" data-level="Sprechen">Sprechen</button>
-      </div>
-    </header>
+    for k, v in defaults.items():
+        if k not in st.session_state:
+            st.session_state[k] = v
 
-    <section class="hero">
-      <div class="card hero-main">
-        <h1>One clean simulator for the full exam structure.</h1>
-        <p>
-          This version keeps the visible catalog from the linked page, organizes it into a modern UI,
-          and leaves clear placeholders where you can insert your own licensed exercise text, audio, and PDFs.
-        </p>
-        <div class="hero-actions">
-          <button class="btn" id="openFirstBtn">Open first exercise</button>
-          <button class="btn secondary" id="openWritingBtn">Open writing task</button>
-        </div>
-      </div>
-      <aside class="card hero-side">
-        <div class="stats">
-          <div class="stat"><b id="sectionCount">5</b><span>Sections</span></div>
-          <div class="stat"><b id="packCount">0</b><span>Exercises</span></div>
-          <div class="stat"><b id="progressChip">0%</b><span>Progress</span></div>
-        </div>
-        <div class="notice">
-          The source page is structured as B1. The page exposes the exam map and titles, while the full exercise content is not reproduced here.
-        </div>
-      </aside>
-    </section>
-
-    <main class="grid">
-      <aside class="card sidebar">
-        <h3>Exam sections</h3>
-        <div class="navlist" id="navlist"></div>
-        <div class="footer">
-          Use the search box to filter titles. Replace placeholders with your own material if you have the rights to use the original prompts.
-        </div>
-      </aside>
-
-      <section class="card content">
-        <div class="sectionhead">
-          <div>
-            <h2 id="sectionTitle">Lesen</h2>
-            <p id="sectionDesc">Choose a part and open any title.</p>
-          </div>
-          <div class="meta">
-            <span class="badge" id="sectionBadge">Reading</span>
-          </div>
-        </div>
-
-        <input class="search" id="searchInput" placeholder="Search titles..." />
-        <div class="packs" id="packs"></div>
-      </section>
-    </main>
-  </div>
-
-  <div class="modal" id="modal">
-    <div class="modal-card">
-      <div class="modal-head">
-        <div>
-          <h3 id="modalTitle">Exercise</h3>
-          <div class="meta" id="modalMeta"></div>
-        </div>
-        <button class="ghost" id="closeModalBtn">Close</button>
-      </div>
-      <div class="modal-body" id="modalBody"></div>
-    </div>
-  </div>
-
-  <script>
-    const catalog = {{ catalog|tojson }};
-    const structure = {{ structure|tojson }};
-
-    const state = {
-      section: "Lesen",
-      search: "",
-      timer: 30 * 60,
-      timerRunning: true,
-      progress: Number(localStorage.getItem("telc_progress") || 0),
-    };
-
-    const el = (id) => document.getElementById(id);
-    const navlist = el("navlist");
-    const packs = el("packs");
-    const modal = el("modal");
-
-    function formatTime(sec){
-      const m = String(Math.floor(sec / 60)).padStart(2, "0");
-      const s = String(sec % 60).padStart(2, "0");
-      return `${m}:${s}`;
-    }
-
-    function updateTimer(){
-      el("timerChip").textContent = "Timer: " + formatTime(Math.max(0, state.timer));
-    }
-
-    setInterval(() => {
-      if (!state.timerRunning) return;
-      state.timer--;
-      updateTimer();
-      if (state.timer <= 0) state.timerRunning = false;
-    }, 1000);
-
-    function saveProgress(value){
-      state.progress = Math.max(0, Math.min(100, value));
-      localStorage.setItem("telc_progress", String(state.progress));
-      el("progressChip").textContent = state.progress + "%";
-    }
-
-    function currentSectionItems(){
-      return catalog.filter(x => x.section === state.section)
-        .filter(x => x.title.toLowerCase().includes(state.search.toLowerCase()));
-    }
-
-    function renderNav(){
-      navlist.innerHTML = "";
-      Object.keys(structure).forEach(section => {
-        const sec = structure[section];
-        const total = catalog.filter(x => x.section === section).length;
-        const item = document.createElement("div");
-        item.className = "navitem" + (section === state.section ? " active" : "");
-        item.innerHTML = `<div><b>${section}</b><br><small>${sec.label} • ${total} exercises</small></div><span>›</span>`;
-        item.onclick = () => {
-          state.section = section;
-          el("searchInput").value = "";
-          state.search = "";
-          renderAll();
-        };
-        navlist.appendChild(item);
-      });
-    }
-
-    function renderPacks(){
-      const sec = structure[state.section];
-      el("sectionTitle").textContent = state.section;
-      el("sectionDesc").textContent = sec.label + " practice, organized by part.";
-      el("sectionBadge").textContent = sec.label;
-      el("packCount").textContent = catalog.length;
-
-      const items = currentSectionItems();
-      packs.innerHTML = "";
-
-      if (!items.length){
-        packs.innerHTML = `<div class="panel" style="grid-column:1/-1">No exercises match your search.</div>`;
-        return;
-      }
-
-      items.forEach(item => {
-        const card = document.createElement("article");
-        card.className = "pack";
-        card.innerHTML = `
-          <div class="pack-top">
-            <div>
-              <span class="badge">${item.part}</span>
-              <h3>${item.title}</h3>
-            </div>
-            <div class="meta">${item.minutes ? item.minutes + " min" : ""}</div>
-          </div>
-          <p>Type: ${item.kind}. This card uses the visible title from the source page and a clean simulator shell.</p>
-          <div class="tagrow">
-            <span class="tag">${item.section_label}</span>
-            <span class="tag">${item.kind}</span>
-            ${item.min_words ? `<span class="tag">Min ${item.min_words} words</span>` : ""}
-          </div>
-          <button>Open exercise</button>
-        `;
-        card.querySelector("button").onclick = () => openExercise(item);
-        packs.appendChild(card);
-      });
-    }
-
-    function renderAll(){
-      renderNav();
-      renderPacks();
-      saveProgress(state.progress);
-    }
-
-    function openExercise(item){
-      modal.classList.add("open");
-      el("modalTitle").textContent = item.title;
-      el("modalMeta").textContent = `${item.part} • ${item.section_label} • ${item.kind}`;
-      if (item.kind === "writing"){
-        renderWriting(item);
-      } else if (item.kind === "speaking"){
-        renderSpeaking(item);
-      } else {
-        renderGeneric(item);
-      }
-    }
-
-    function renderGeneric(item){
-      modalBody.innerHTML = `
-        <div class="panel">
-          <p><b>Placeholder exercise shell.</b></p>
-          <p style="color:var(--muted);line-height:1.6">
-            Insert your own licensed reading/listening/grammar content here.
-            This template keeps the structure ready without copying the original text.
-          </p>
-
-          <div class="question">
-            <h4>1. Sample answer area</h4>
-            <div class="options">
-              <label class="option"><input class="sr-only" type="radio" name="q1"> Option A</label>
-              <label class="option"><input class="sr-only" type="radio" name="q1"> Option B</label>
-              <label class="option"><input class="sr-only" type="radio" name="q1"> Option C</label>
-            </div>
-          </div>
-
-          <div class="question">
-            <h4>2. Sample answer area</h4>
-            <div class="options">
-              <label class="option"><input class="sr-only" type="radio" name="q2"> Option A</label>
-              <label class="option"><input class="sr-only" type="radio" name="q2"> Option B</label>
-              <label class="option"><input class="sr-only" type="radio" name="q2"> Option C</label>
-            </div>
-          </div>
-
-          <div class="mini-actions">
-            <button class="ghost" id="markDone">Mark as done</button>
-          </div>
-          <div class="feedback" id="genericFeedback">Use this slot for the original exercise content or your own practice set.</div>
-        </div>
-      `;
-      document.getElementById("markDone").onclick = () => {
-        const fb = document.getElementById("genericFeedback");
-        fb.className = "feedback good";
-        fb.textContent = "Completed.";
-        saveProgress(state.progress + 5);
-      };
-    }
-
-    function renderWriting(item){
-      const key = "draft_" + item.id;
-      const saved = localStorage.getItem(key) || "";
-      modalBody.innerHTML = `
-        <div class="panel">
-          <p><b>Writing task shell.</b> The linked page shows a complaint letter task with 30 minutes and at least 150 words.  [oai_citation:1‡telcexam.tech](https://telcexam.tech/quizz/schreiben2_b2.html)</p>
-          <p style="color:var(--muted);line-height:1.6">
-            Add the original prompt text only if you have the rights to do so. This layout is ready for your own content.
-          </p>
-          <textarea id="writingBox" placeholder="Write your response here...">${saved}</textarea>
-          <div class="mini-actions">
-            <button class="ghost" id="saveDraft">Save draft</button>
-            <button class="ghost" id="clearDraft">Clear</button>
-          </div>
-          <div class="feedback" id="writingFeedback">Draft saved locally in the browser.</div>
-        </div>
-      `;
-      const box = document.getElementById("writingBox");
-      document.getElementById("saveDraft").onclick = () => {
-        localStorage.setItem(key, box.value);
-        const fb = document.getElementById("writingFeedback");
-        fb.className = "feedback good";
-        fb.textContent = "Draft saved locally.";
-        saveProgress(state.progress + 8);
-      };
-      document.getElementById("clearDraft").onclick = () => {
-        box.value = "";
-        localStorage.removeItem(key);
-      };
-    }
-
-    function renderSpeaking(item){
-      modalBody.innerHTML = `
-        <div class="panel">
-          <p><b>Speaking task shell.</b> The linked PDF is 5 pages long and contains presentation prompts and follow-up questions.  [oai_citation:2‡telcexam.tech](https://telcexam.tech/quizz/sprechen1.pdf)</p>
-          <p style="color:var(--muted);line-height:1.6">
-            Use this structure for your own prompts, timing, and follow-up cards.
-          </p>
-          <div class="question">
-            <h4>Topic cards</h4>
-            <div class="tagrow">
-              <span class="tag">Book</span>
-              <span class="tag">Film</span>
-              <span class="tag">Travel</span>
-              <span class="tag">Music event</span>
-              <span class="tag">Sport event</span>
-            </div>
-          </div>
-          <div class="question">
-            <h4>Practice box</h4>
-            <textarea placeholder="Write notes for your speaking answer..."></textarea>
-          </div>
-          <div class="mini-actions">
-            <button class="ghost" id="markSpeak">Mark as practiced</button>
-          </div>
-          <div class="feedback" id="speakFeedback">Practice out loud, then repeat with a timer.</div>
-        </div>
-      `;
-      document.getElementById("markSpeak").onclick = () => {
-        const fb = document.getElementById("speakFeedback");
-        fb.className = "feedback good";
-        fb.textContent = "Marked as practiced.";
-        saveProgress(state.progress + 8);
-      };
-    }
-
-    el("searchInput").addEventListener("input", (e) => {
-      state.search = e.target.value;
-      renderPacks();
-    });
-
-    el("closeModalBtn").onclick = () => modal.classList.remove("open");
-    modal.addEventListener("click", (e) => { if (e.target === modal) modal.classList.remove("open"); });
-
-    document.querySelectorAll(".pill[data-level]").forEach(btn => {
-      btn.addEventListener("click", () => {
-        document.querySelectorAll(".pill[data-level]").forEach(b => b.classList.remove("active"));
-        btn.classList.add("active");
-        state.section = btn.dataset.level;
-        state.search = "";
-        el("searchInput").value = "";
-        renderAll();
-      });
-    });
-
-    document.getElementById("openFirstBtn").onclick = () => {
-      const first = catalog[0];
-      openExercise(first);
-    };
-
-    document.getElementById("openWritingBtn").onclick = () => {
-      const firstWriting = catalog.find(x => x.section === "Schreiben");
-      if (firstWriting) openExercise(firstWriting);
-    };
-
-    renderAll();
-    updateTimer();
-  </script>
-</body>
-</html>
-"""
-
-@app.route("/")
-def home():
-    return render_template_string(
-        HTML,
-        catalog=CATALOG,
-        structure=EXAM,
+def css():
+    st.markdown(
+        """
+        <style>
+        .block-container { padding-top: 1.2rem; }
+        div[data-testid="stMetric"] {
+            background: rgba(255,255,255,0.03);
+            border: 1px solid rgba(255,255,255,0.08);
+            padding: 12px 14px;
+            border-radius: 16px;
+        }
+        .card {
+            background: rgba(17,26,49,0.82);
+            border: 1px solid rgba(255,255,255,0.08);
+            border-radius: 20px;
+            padding: 16px 18px;
+            margin-bottom: 12px;
+        }
+        .soft {
+            color: #a9b3d4;
+        }
+        .badge {
+            display:inline-block;
+            padding:6px 10px;
+            border-radius:999px;
+            background: rgba(124,140,255,0.12);
+            border: 1px solid rgba(124,140,255,0.24);
+            font-size: 12px;
+            font-weight: 700;
+        }
+        .title {
+            font-size: 2rem;
+            font-weight: 800;
+            line-height: 1.05;
+            margin-bottom: 0.35rem;
+        }
+        .subtle {
+            color: #a9b3d4;
+            line-height: 1.6;
+        }
+        .divider {
+            margin: 1rem 0;
+            border-top: 1px solid rgba(255,255,255,0.08);
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
     )
 
-@app.route("/api/catalog")
-def api_catalog():
-    return jsonify(CATALOG)
+def pretty_timer(seconds):
+    seconds = max(0, int(seconds))
+    m = seconds // 60
+    s = seconds % 60
+    return f"{m:02d}:{s:02d}"
 
-@app.route("/api/structure")
-def api_structure():
-    return jsonify(EXAM)
+def elapsed_seconds():
+    return int(time.time() - st.session_state.started_at)
 
-if __name__ == "__main__":
-    app.run(debug=True)
+def exam_remaining():
+    total = st.session_state.exam_minutes * 60
+    return total - elapsed_seconds()
+
+def section_items(section):
+    return [x for x in CATALOG if x["section"] == section]
+
+def filtered_items(section, query):
+    items = section_items(section)
+    if not query:
+        return items
+    q = query.lower().strip()
+    return [
+        x for x in items
+        if q in x["title"].lower()
+        or q in x["part"].lower()
+        or q in x["kind"].lower()
+    ]
+
+def item_by_id(item_id):
+    for x in CATALOG:
+        if x["id"] == item_id:
+            return x
+    return None
+
+def choose_first_writing():
+    for x in CATALOG:
+        if x["kind"] == "writing":
+            return x
+    return None
+
+def progress_update(delta):
+    st.session_state.progress = max(0, min(100, st.session_state.progress + delta))
+
+def render_header():
+    remaining = exam_remaining()
+    col1, col2, col3, col4 = st.columns([3.2, 1, 1, 1])
+    with col1:
+        st.markdown(
+            """
+            <div class="title">TELC Exam Simulator</div>
+            <div class="subtle">
+            Modern Streamlit practice platform built from the visible public catalog of the linked page.
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+    with col2:
+        st.metric("Time left", pretty_timer(remaining))
+    with col3:
+        st.metric("Progress", f"{st.session_state.progress}%")
+    with col4:
+        st.metric("Catalog", f"{len(CATALOG)} items")
+
+def render_sidebar():
+    st.sidebar.markdown("## Simulator controls")
+    st.sidebar.caption("The source page is labeled B1, while this app is branded as a B2-style simulator shell.")
+
+    st.session_state.section = st.sidebar.selectbox(
+        "Section",
+        SECTION_ORDER,
+        index=SECTION_ORDER.index(st.session_state.section),
+    )
+    st.session_state.search = st.sidebar.text_input(
+        "Search titles",
+        value=st.session_state.search,
+        placeholder="Type a title or part name...",
+    )
+
+    st.session_state.exam_minutes = st.sidebar.slider(
+        "Exam duration",
+        min_value=30,
+        max_value=180,
+        value=st.session_state.exam_minutes,
+        step=5,
+    )
+
+    if st.sidebar.button("Restart timer"):
+        st.session_state.started_at = time.time()
+
+    if st.sidebar.button("Reset progress"):
+        st.session_state.progress = 0
+
+    st.sidebar.markdown("---")
+    st.sidebar.markdown("### Exam overview")
+    for sec in SECTION_ORDER:
+        total = len(section_items(sec))
+        st.sidebar.write(f"• {sec}: {total} items")
+
+def render_overview():
+    sec = EXAM_STRUCTURE[st.session_state.section]
+    items = filtered_items(st.session_state.section, st.session_state.search)
+
+    st.markdown(
+        f"""
+        <div class="card">
+            <div class="badge">{st.session_state.section} • {sec['label']}</div>
+            <h2 style="margin:10px 0 6px 0;">{st.session_state.section}</h2>
+            <div class="subtle">
+                Open any exercise title to practice it in a clean exam-like shell.
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    if not items:
+        st.info("No items matched your search.")
+        return
+
+    for part in sec["parts"]:
+        part_items = [x for x in items if x["part"] == part["name"]]
+        if not part_items:
+            continue
+
+        with st.expander(f"{part['name']}  •  {len(part_items)} items", expanded=True):
+            cols = st.columns(2)
+            for idx, item in enumerate(part_items):
+                with cols[idx % 2]:
+                    st.markdown(
+                        f"""
+                        <div class="card">
+                            <div class="badge">{item['kind'].title()}</div>
+                            <h4 style="margin:10px 0 6px 0;">{item['title']}</h4>
+                            <div class="subtle">
+                                {item['section_label']} • {item['part']}
+                                {" • " + str(item['minutes']) + " min" if item['minutes'] else ""}
+                                {" • min " + str(item['min_words']) + " words" if item.get('min_words') else ""}
+                            </div>
+                        </div>
+                        """,
+                        unsafe_allow_html=True,
+                    )
+                    if st.button("Open exercise", key=f"open_{item['id']}"):
+                        st.session_state.selected_id = item["id"]
+                        st.rerun()
+
+def placeholder_mcq(title, seed_key):
+    # Deterministic, exam-like practice shell without reproducing the proprietary text.
+    choices = [
+        "A", "B", "C", "D"
+    ]
+    q1 = f"What is the best next step for the exercise titled '{title}'?"
+    q2 = "Which strategy is most useful here?"
+    q3 = "What should you focus on first?"
+    q4 = "How do you manage the time?"
+    q5 = "Which answer usually fits a formal exam task?"
+
+    questions = [
+        (q1, ["Read the title carefully", "Skip all tasks", "Answer randomly", "Only check spelling"], 0),
+        (q2, ["Find keywords", "Ignore the text", "Wait for luck", "Use a calculator"], 0),
+        (q3, ["Task instructions", "Decorations", "Music", "Ads"], 0),
+        (q4, ["Move fast but stay accurate", "Spend all time on one item", "Leave early", "Guess every answer"], 0),
+        (q5, ["Clear and formal", "Messy and short", "Off-topic", "Unfinished"], 0),
+    ]
+
+    score = 0
+    for i, (question, options, answer) in enumerate(questions):
+        st.markdown(f"**{i+1}. {question}**")
+        selected = st.radio(
+            label="",
+            options=options,
+            key=f"{seed_key}_q{i}",
+            horizontal=False,
+            index=None,
+            label_visibility="collapsed",
+        )
+        if selected is not None and st.button(f"Check {i+1}", key=f"{seed_key}_check_{i}"):
+            if options.index(selected) == answer:
+                st.success("Correct.")
+                score += 1
+                progress_update(2)
+            else:
+                st.error("Try again.")
+    if st.button("Submit practice set", key=f"{seed_key}_submit"):
+        st.success("Practice set submitted.")
+        progress_update(8)
+        st.write(f"Score: {score}/{len(questions)}")
+
+def render_generic_exercise(item):
+    st.markdown(
+        f"""
+        <div class="card">
+            <div class="badge">{item['kind'].title()}</div>
+            <h2 style="margin:10px 0 6px 0;">{item['title']}</h2>
+            <div class="subtle">
+                {item['section']} • {item['part']}{" • " + str(item['minutes']) + " min" if item['minutes'] else ""}
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    st.info(
+        "This is an exam shell built from the visible public catalog. "
+        "Drop in licensed content or your own rewritten questions here."
+    )
+
+    left, right = st.columns([1.2, 0.8])
+    with left:
+        placeholder_mcq(item["title"], item["id"])
+    with right:
+        st.markdown("### What this slot represents")
+        st.write("Use this area for the original task, a licensed replacement, or your own practice content.")
+        st.markdown("### Quick notes")
+        note = st.text_area("Notes", key=f"notes_{item['id']}", height=180)
+        if st.button("Save notes", key=f"save_notes_{item['id']}"):
+            st.success("Saved in this session.")
+            progress_update(1)
+
+def render_writing_exercise(item):
+    st.markdown(
+        f"""
+        <div class="card">
+            <div class="badge">Writing</div>
+            <h2 style="margin:10px 0 6px 0;">{item['title']}</h2>
+            <div class="subtle">30 minutes • at least 150 words</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    st.info(
+        "The public page shows a complaint-letter writing task with a 30-minute limit and a 150-word minimum. "
+        "This app uses that structure, while the prompt below is a safe paraphrase."
+    )
+
+    st.markdown("### Task brief")
+    st.write(
+        "Write a formal complaint letter after taking part in a cycling tour that did not meet your expectations. "
+        "Include greeting, subject line, detailed problems, what went well, and a clear closing."
+    )
+
+    default_text = st.session_state.writing_texts.get(item["id"], "")
+    text = st.text_area(
+        "Your text",
+        value=default_text,
+        height=320,
+        placeholder="Start your complaint letter here...",
+        key=f"writing_box_{item['id']}",
+    )
+
+    words = len(re.findall(r"\S+", text.strip())) if text.strip() else 0
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Words", words)
+    c2.metric("Target", "150+")
+    c3.metric("Mode", "Formal letter")
+
+    if st.button("Save draft", key=f"save_draft_{item['id']}"):
+        st.session_state.writing_texts[item["id"]] = text
+        st.success("Draft saved in this session.")
+        progress_update(5)
+
+    if st.button("Clear draft", key=f"clear_draft_{item['id']}"):
+        st.session_state.writing_texts[item["id"]] = ""
+        st.rerun()
+
+    st.markdown("### Checklist")
+    checklist = [
+        "Add sender, address, date, subject line, greeting, and closing.",
+        "Describe the problem clearly and politely.",
+        "State what you want to change or improve.",
+        "Keep the tone formal and organized.",
+    ]
+    for i, point in enumerate(checklist, start=1):
+        st.checkbox(point, key=f"{item['id']}_check_{i}")
+
+def render_speaking_exercise(item):
+    st.markdown(
+        f"""
+        <div class="card">
+            <div class="badge">Speaking</div>
+            <h2 style="margin:10px 0 6px 0;">{item['title']}</h2>
+            <div class="subtle">Timed speaking practice</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    st.info(
+        "The public page links to a 5-page speaking PDF. This app provides a reusable speaking simulator shell "
+        "with topics, timer, and note-taking."
+    )
+
+    topics = [
+        "A book you like",
+        "A travel experience",
+        "A film or series",
+        "A sport event",
+        "A favorite city",
+        "A useful app",
+    ]
+    st.markdown("### Practice topics")
+    st.write("Choose one and speak for 2 minutes.")
+    chosen_topic = st.selectbox("Topic", topics, key=f"topic_{item['id']}")
+
+    notes = st.text_area("Speaking notes", height=220, key=f"speaker_notes_{item['id']}")
+    cols = st.columns(3)
+    if "speak_start" not in st.session_state:
+        st.session_state.speak_start = None
+    with cols[0]:
+        if st.button("Start 2-minute timer", key=f"start_speak_{item['id']}"):
+            st.session_state.speak_start = time.time()
+    with cols[1]:
+        if st.button("Mark completed", key=f"done_speak_{item['id']}"):
+            st.success("Marked completed.")
+            progress_update(4)
+    with cols[2]:
+        if st.button("Save notes", key=f"save_speak_{item['id']}"):
+            st.success("Saved in this session.")
+            progress_update(1)
+
+    if st.session_state.speak_start is not None:
+        elapsed = int(time.time() - st.session_state.speak_start)
+        remaining = max(0, 120 - elapsed)
+        st.progress(min(1.0, elapsed / 120))
+        st.write(f"Time left: {pretty_timer(remaining)}")
+        if remaining == 0:
+            st.success("Time is up.")
+
+    st.markdown("### Useful phrases")
+    st.write("I think that ...")
+    st.write("In my opinion, ...")
+    st.write("On the one hand ... on the other hand ...")
+    st.write(f"Current topic: {chosen_topic}")
+
+def render_listening_exercise(item):
+    st.markdown(
+        f"""
+        <div class="card">
+            <div class="badge">Listening</div>
+            <h2 style="margin:10px 0 6px 0;">{item['title']}</h2>
+            <div class="subtle">
+                Listening practice shell. Add your own audio or licensed material here.
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    st.info(
+        "The public page shows listening sections with audio-backed true/false tasks. "
+        "This simulator keeps the timing and answer flow, but does not reproduce the original audio."
+    )
+
+    uploaded = st.file_uploader("Upload audio for practice", type=["mp3", "wav", "m4a"], key=f"audio_{item['id']}")
+    if uploaded is not None:
+        st.audio(uploaded)
+
+    st.markdown("### Transcript / notes")
+    transcript = st.text_area(
+        "Write your transcript or key phrases here",
+        height=180,
+        key=f"transcript_{item['id']}",
+        placeholder="Paste your own transcript or listening notes...",
+    )
+
+    questions = [
+        ("The speaker agrees with the proposal.", ["True", "False"], 0),
+        ("The meeting was postponed.", ["True", "False"], 1),
+        ("The message is about transport.", ["True", "False"], 0),
+        ("The problem was solved immediately.", ["True", "False"], 1),
+    ]
+    score = 0
+    for i, (q, options, answer) in enumerate(questions, start=1):
+        st.markdown(f"**{i}. {q}**")
+        chosen = st.radio(
+            label="",
+            options=options,
+            key=f"{item['id']}_listen_q{i}",
+            horizontal=True,
+            index=None,
+            label_visibility="collapsed",
+        )
+        if chosen is not None and st.button(f"Check {i}", key=f"{item['id']}_listen_check_{i}"):
+            if options.index(chosen) == answer:
+                st.success("Correct.")
+                score += 1
+                progress_update(2)
+            else:
+                st.error("Not quite.")
+
+    if st.button("Submit listening set", key=f"{item['id']}_listen_submit"):
+        st.success("Listening set submitted.")
+        progress_update(6)
+        st.write(f"Score: {score}/{len(questions)}")
+
+def render_selected():
+    item = item_by_id(st.session_state.selected_id)
+    if not item:
+        return
+
+    back1, back2, back3 = st.columns([0.18, 0.18, 0.64])
+    with back1:
+        if st.button("← Back"):
+            st.session_state.selected_id = None
+            st.rerun()
+
+    with back2:
+        if st.button("Reset exam"):
+            st.session_state.selected_id = None
+            st.session_state.progress = 0
+            st.session_state.started_at = time.time()
+            st.rerun()
+
+    st.markdown("---")
+
+    if item["kind"] == "writing":
+        render_writing_exercise(item)
+    elif item["kind"] == "speaking":
+        render_speaking_exercise(item)
+    elif item["kind"] == "listening":
+        render_listening_exercise(item)
+    else:
+        render_generic_exercise(item)
+
+# ----------------------------
+# App
+# ----------------------------
+init_state()
+css()
+
+render_header()
+render_sidebar()
+
+tab1, tab2, tab3 = st.tabs(["Catalog", "Selected exercise", "Exam mode"])
+
+with tab1:
+    render_overview()
+
+with tab2:
+    if st.session_state.selected_id is None:
+        st.info("Open any exercise from the Catalog tab.")
+        first_writing = choose_first_writing()
+        if first_writing and st.button("Open writing task"):
+            st.session_state.selected_id = first_writing["id"]
+            st.rerun()
+    else:
+        render_selected()
+
+with tab3:
+    st.markdown(
+        """
+        <div class="card">
+            <div class="badge">Exam mode</div>
+            <h2 style="margin:10px 0 6px 0;">Full simulator overview</h2>
+            <div class="subtle">
+                Use this tab to present the exam structure like a product landing page.
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    cols = st.columns(5)
+    for i, sec in enumerate(SECTION_ORDER):
+        cols[i].metric(sec, f"{len(section_items(sec))} items")
+
+    st.markdown("### Quick start")
+    st.write("1. Choose a section in the sidebar.")
+    st.write("2. Open a title.")
+    st.write("3. Use the writing and speaking shells for timed practice.")
+    st.write("4. Replace the placeholders with your own licensed material when needed.")
+
+    st.markdown("### Progress")
+    st.progress(st.session_state.progress / 100 if st.session_state.progress else 0)
+
+    st.markdown("### Notes")
+    st.write(
+        "The public page is organized as a B1 catalog, but the simulator is branded for B2-style practice. "
+        "The structure here is built from the visible section map and titles."
+    )
